@@ -1044,6 +1044,27 @@ echo 1 > /sys/kernel/tracing/events/kprobes/enable
 - **Interpret:** these are *live* values, so they answer "what is programmed", not "who
   programmed it". A value that matches neither the vendor's nor yours is usually the
   hardware's power-on default.
+- **☠️ Find which per-generation op table your board actually binds to before writing
+  code into one.** Drivers for a family of SoCs carry several implementations of the same
+  ops and pick one from a per-board resources table. The name of the newest generation is
+  not the one a newer SoC necessarily uses, and the code compiles, ships and runs either
+  way — it simply never executes. Read the binding (`<soc>_res[] → .hw_ops`), do not infer
+  it from the SoC's age or from which file looks most modern. The tell afterwards is a
+  change that is provably in the binary and provably has no effect.
+- **☠️ "The driver ignored my request" is a claim about a syscall, so make the syscall
+  yourself.** A library reporting what a kernel interface did is only as good as what it
+  actually put in the call — and the two failure modes, *the driver refused* and *the
+  library never asked*, are indistinguishable from the library's own log while wanting
+  opposite fixes. Twenty lines of ctypes issuing the ioctl by hand splits them in one
+  run, needs nothing else running, and is worth doing **before** changing either side.
+  (Watch for count fields in particular: a struct where a count gates a loop over an
+  array drops the whole payload when the array is filled in and the count is left at its
+  default, and downstream that looks exactly like a rejection.)
+- **☠️ When something starts working, read the new failure mode before celebrating.**
+  A throughput number that cannot physically happen — more frames per second than the
+  sensor produces — is not success, it is work completing by failing fast. Check the
+  kernel log for what the newly-enabled path now does: an import that was refused before
+  and is accepted now can fault where it could not previously be asked to.
 - **☠️ A bit that reads back exactly as you programmed it, while nothing else moves,
   usually means you wrote the wrong register.** The read-back proves the write landed;
   it proves nothing about what that address *is*. Register offsets are reused across

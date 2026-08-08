@@ -58,6 +58,7 @@ directory.
 | `deploy-ko-dtb-trace.sh` | Deploy the rebuilt slim-qcom-ngd-ctrl.ko (CHECK_FRAMER_STATUS fix) + the slimbus-enabled sdm632-fairphone-fp3.dtb to the live pmOS, reboot, and captur… |
 | `build_fg.sh` | Config lives in fp3-env.sh; every value there has a documented default. |
 | `egl_import_test.py` | Does the GPU accept the raw camera buffer at all? Enumerates the dmabuf formats Mesa will import (surfaceless EGL, so it neither needs nor takes the compositor's DRM master). |
+| `v4l2_tryfmt.py` | Issues VIDIOC_TRY_FMT by hand, so "the driver ignored my bytesperline" can be checked against the driver rather than against the library that reported it. Splits *refused by the kernel* from *never asked for*. |
 | `fp3-kbuild.sh` | Incremental kernel cross-builds through pmbootstrap's envkernel, keeping objects in `.output/` between runs — `setup` once per tree, then plain make arguments. Turns a six-file change from a whole-package rebuild into a targeted compile. |
 | `egl_stride_probe.py` | Which pitches will Mesa actually *import*? Allocates one oversized buffer, exports it, and imports the same fd repeatedly while varying only the claimed pitch — so accept/reject comes back per candidate instead of being inferred from what the allocator prefers. |
 | `gbm_stride_test.py` | What stride does the GPU require for a given format and width? Asks the GBM allocator, which shares its layout code with the importer, and finds the alignment step by bisection rather than inferring it from a driver's complaint. |

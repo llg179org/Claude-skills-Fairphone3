@@ -1055,6 +1055,23 @@ carefully to work out whether your part is inside or outside it.
   requirement inferred from one path and paid for in another is a change you
   cannot defend when it does not work.
 
+- ☠️ **When an interface stutters while something on screen animates, check what the
+  toolkit is rendering *with* before profiling the application.** A distribution can set
+  a session-wide environment variable that puts every GTK4 application on the software
+  renderer — a defensible choice on a GPU whose accelerated path the distro does not
+  trust — and the consequence is that any continuously animating content forces a full
+  window repaint on the CPU at that content's frame rate, with the scroll animation
+  sharing what is left. The signature is specific and cheap to read: the *application*
+  burns more than a core while the *compositor* sits near idle, and the stutter is
+  insensitive to how large the animating surface is. Read the environment of the running
+  process (`tr '\0' '\n' < /proc/<pid>/environ`), not of your shell, because the session
+  and your login get theirs from different places. Ask the toolkit which values it
+  accepts rather than assuming (`GSK_RENDERER=help`); a name it no longer knows produces
+  a warning and a silent fallback, so a measurement taken under one can be attributing
+  the result to the wrong renderer. Override per user with `environment.d` and
+  `systemctl --user set-environment` rather than editing the distro's file, which is
+  package-owned and comes back on upgrade.
+
 - **A truncated function pointer segfaults instead of failing.** `ctypes`
   defaults a foreign function's return type to `int`, so
   `eglGetProcAddress(...)` hands back a 64-bit address with its top half cut
