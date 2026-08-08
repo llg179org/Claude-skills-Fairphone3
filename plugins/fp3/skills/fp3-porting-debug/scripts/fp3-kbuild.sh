@@ -45,21 +45,49 @@ cd "$TREE" || die "cannot enter $TREE"
 # tree makes the outputmakefile target fail.
 [ -e .config ] && die "remove the stray .config in $TREE — with O=.output it lives in .output"
 
+# envkernel is written to be sourced into an INTERACTIVE shell, and it fights a
+# script two ways. It exposes `pmbootstrap` and `make` as shell ALIASES, which a
+# non-interactive script never expands ("pmbootstrap: command not found"); and
+# sourcing it into the main shell terminates the script (it is meant to leave you
+# *in* the env). Both are contained by sourcing it inside a subshell and then
+# bypassing the aliases there: its own internals drive the chroot through the
+# `$pmbootstrap` VARIABLE it also sets, so the mount and setup still happen, and
+# `alias make=...` still populates `BASH_ALIASES[make]` even without expansion —
+# so the build is that alias body with the nested `pmbootstrap` alias swapped for
+# its path. `_envmake` assumes envkernel is already sourced in the current
+# subshell.
+_envmake() {
+    [ -n "${pmbootstrap:-}" ] || { echo "envkernel did not set \$pmbootstrap" >&2; return 1; }
+    local m="${BASH_ALIASES[make]:-}"
+    [ -n "$m" ] || { echo "envkernel did not define its make alias" >&2; return 1; }
+    # The alias body names `pmbootstrap` twice - once in a banner echo, once as
+    # the real command - so substitute every occurrence, not just the first.
+    eval "${m//pmbootstrap/$pmbootstrap} \"\$@\""
+}
+
 case "${1:-}" in
 setup)
     [ -r "$CONFIG" ] || die "no config at $CONFIG (set FP3_KCONFIG)"
+    # The chroot's build user (pmos) writes .config and every object into
+    # .output, so it must be writable by that user. A host-side `mkdir` makes it
+    # host-owned and the chroot cp then fails with EPERM - and olddefconfig
+    # silently falls back to the arch defconfig, which builds a kernel for a
+    # different phone. So create it and make it writable to the chroot user; the
+    # chmod is a no-op if it is already chroot-owned from a previous setup.
     mkdir -p .output
-    # .output is owned by the chroot user, so the config has to be placed from
-    # inside the chroot rather than copied in from the host - a host-side cp
-    # fails with EPERM and olddefconfig then silently falls back to the
-    # arch defconfig, which builds a kernel for a different phone.
+    chmod 0777 .output 2>/dev/null || true
     cp "$CONFIG" ./fp3-kbuild.config || die "cannot stage the config in the tree"
-    ( . "$ENVKERNEL" >/dev/null 2>&1
-      pmbootstrap -q chroot --user -- cp /mnt/linux/fp3-kbuild.config \
-                                         /mnt/linux/.output/.config ) \
+    ( set +u; set --  # envkernel is not set -u clean, and `.` passes our $@ ("setup") to it
+      # shellcheck disable=SC1090
+      . "$ENVKERNEL" >/dev/null 2>&1 || exit 1
+      "$pmbootstrap" -q chroot --user -- cp /mnt/linux/fp3-kbuild.config \
+                                            /mnt/linux/.output/.config ) \
         || die "could not place the config into .output through the chroot"
     rm -f ./fp3-kbuild.config
-    ( . "$ENVKERNEL" >/dev/null 2>&1; make olddefconfig ) \
+    ( set +u; set --  # envkernel is not set -u clean, and `.` passes our $@ ("setup") to it
+      # shellcheck disable=SC1090
+      . "$ENVKERNEL" >/dev/null 2>&1 || exit 1
+      _envmake olddefconfig ) \
         || die "olddefconfig failed"
     echo "fp3-kbuild: $TREE is set up; .output/.config from $(basename "$CONFIG")"
     ;;
@@ -72,8 +100,11 @@ ko)
     ;;
 *)
     [ -r .output/.config ] || die "run 'fp3-kbuild.sh setup' first"
-    # shellcheck disable=SC1090
-    . "$ENVKERNEL" >/dev/null 2>&1 || die "could not source envkernel"
-    exec make "$@"
+    ( set +u                 # envkernel.sh is not set -u clean
+      _args=( "$@" ); set -- # and `.` passes our positional params to what it sources,
+                             # so save the make args, then clear $@ before sourcing
+      # shellcheck disable=SC1090
+      . "$ENVKERNEL" >/dev/null 2>&1 || exit 1
+      _envmake "${_args[@]}" )
     ;;
 esac
