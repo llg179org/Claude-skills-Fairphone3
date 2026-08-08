@@ -1273,6 +1273,94 @@ an ownership hypothesis that had already been excluded.
 the journal's most recent verdicts, and against the draft's own data. A statement that
 was true three rounds ago reads exactly like a current one.
 
+## Self-review: read the diff, not just the series
+
+Everything above shapes the *series* — which commits exist, what is imported,
+where the DTS goes. This is the other half a maintainer will do if you do not:
+review the **code in the diff** itself. Do it as a distinct pass, because it is a
+different question and it has a specific failure mode here — **an AI reviewing its
+own patch is confirmation bias in pure form**, the same assumptions that wrote the
+line re-reading straight past its bug. So this pass leans on **mechanical checkers
+that do not care who wrote the line**, and on reading against an external standard,
+not on re-reading with the mind that produced the code.
+
+**Prior art, cited because it is worth reading and because one part must *not* be
+copied.** Two efforts already encode kernel patch review for an LLM:
+
+- **`jlelli/claude-kernel-reviews`** — a kernel developer's (Juri Lelli) Claude
+  Code review workflow: `b4 shazam -l <msgid>` to apply a series, an index of the
+  surrounding code (`semcode-index`) so the review is grounded in the tree rather
+  than in the diff alone, then `scripts/checkpatch.pl --git HEAD`, `make W=1`,
+  `make C=2` (sparse), `make coccicheck`, and a per-patch read against
+  `coding-style.rst`. Source:
+  <https://github.com/jlelli/claude-kernel-reviews>.
+- **Sashiko** — an agent that watches the lists and posts reviews, built around
+  *verifying a finding before propagating it* so an AI's false positives do not
+  reach the list. That discipline is the point to borrow: a self-review that
+  invents objections is worse than none. Source:
+  <https://mcpmarket.com/tools/skills/sashiko-kernel-patch-reviewer>.
+
+☠️ **Do not copy the attribution form from a review config into a submission.**
+jlelli's setup tags commits `Co-developed-by: CLAUDE <model>` — correct for an
+in-house flow, and *invalid upstream*: [Authorship](#authorship-and-provenance)
+explains why an AI upstream carries `Assisted-by:` and never a `Co-developed-by:`
+or `Signed-off-by:`. Review tooling and a submission answer to different rules.
+
+**The checker gauntlet.** The canonical list is the kernel's own
+[submit-checklist](https://docs.kernel.org/process/submit-checklist.html); run
+what a cross-build allows and **say in the cover letter which you ran** (this is
+also where the `Assisted-by:` optional tool slots come from — list a tool only if
+you actually ran it). The incremental build wrapper makes these cheap now
+(`fp3-kbuild.sh <args>`, which is envkernel underneath):
+
+- `scripts/checkpatch.pl --strict` **per patch** (already required above, under
+  §"Splitting a mixed commit" and the checkpatch traps).
+- `make W=1` over the touched files (`fp3-kbuild.sh W=1 <subdir>/`) — the warnings
+  gcc suppresses by default; your new lines must add none.
+- **sparse** (`make C=2 <file>`, where the chroot has `sparse`) — the class gcc
+  cannot see: endianness (`__le*`/`__be*`), `__user`-pointer misuse, lock-context
+  imbalance. This is the checker that would have flagged the `qmi_encdec`
+  width bug's neighbourhood.
+- `make coccicheck` (Coccinelle) and, where present, `smatch` / `clang-analyzer`.
+- `make checkstack` when the change adds large on-stack objects.
+- `#include` the header for every facility you use — never lean on a transitive
+  include — and give every memory barrier a comment saying what it orders (both
+  are explicit submit-checklist items).
+- New global API gets **kernel-doc**; a new module parameter gets
+  `MODULE_PARM_DESC()`; a new Kconfig option gets help text and defaults off.
+
+**Read the diff for the four things no checker sees** — these are the recurring
+driver-review comments, and they are what
+[submitting-patches](https://docs.kernel.org/process/submitting-patches.html) and
+[kernelnewbies PatchTipsAndTricks](https://kernelnewbies.org/PatchTipsAndTricks)
+tell you to expect:
+
+- **Locking.** Every lock is dropped on *every* path, the error ones included; no
+  sleep under a spinlock (`CONFIG_DEBUG_ATOMIC_SLEEP` proves it on the device);
+  the lock actually covers the data it is claimed to.
+- **Error paths free what the success path took.** `devm_*` where it fits, matched
+  `goto` unwinding where it does not. A leak on a failure path is the single most
+  common thing a driver review flags.
+- **Types describe the hardware, not the C default.** A register field's width
+  comes from the datasheet; the one-byte length read as `u32` in `qmi_encdec` is
+  the shape of the bug (see [the `Fixes:` recipe](#a-fixes-target-comes-from-blame-never-from-the-files-age)).
+- **The message says *why*, imperative mood** ("fix", not "fixed" / "this patch
+  fixes"), and any commit it names is `<12-hex> ("subject")` from `git rev-parse`.
+
+**Revision mechanics**, once a v1 has been reviewed (from
+[kernelnewbies PatchTipsAndTricks](https://kernelnewbies.org/PatchTipsAndTricks)):
+never hand-edit a generated patch's body or its subject beyond the `[PATCH vN]`
+prefix — maintainers read a mutt-edited diff as sloppy; **carry every
+`Reviewed-by:`/`Tested-by:` a reviewer gave into the next version** (silently
+dropping them is how you lose reviewers); put the inter-version changelog **below
+the `---`** so it never lands in the git log; `[RFC]` marks a first-time feature,
+not a bugfix.
+
+The functional gate does not move: a green `fp3-selftest` and the rebase/CONFIG
+pass in [the rebase-and-retest gate](#the-rebase-and-retest-gate-do-not-skip-before-submitting)
+are what `generated-content.rst` invites a maintainer to *demand* of tool-assisted
+work — so a self-review that stops at "sparse is clean" is half done.
+
 ## Pre-submit checklist
 
 - [ ] Destination is **LKML** — msm8953-mainline will not merge AI-assisted work,
@@ -1293,6 +1381,15 @@ was true three rounds ago reads exactly like a current one.
 - [ ] Rebased across the base bump; **rebuilt + CONFIG-checked + `fp3-selftest` green.**
 - [ ] `scripts/checkpatch.pl --strict` clean; `scripts/get_maintainer.pl` used for
       the recipient set.
+- [ ] **The checker gauntlet was run and named**: `make W=1` over the touched files
+      adds no warning, `sparse` (`make C=2`) is clean, `coccicheck` run — and the
+      cover letter says which ran (see [Self-review](#self-review-read-the-diff-not-just-the-series)).
+- [ ] **The diff was read for the four a checker misses**: locking dropped on every
+      path incl. error, error paths free what success allocated, register types match
+      the hardware not the C default, message says *why* in imperative mood.
+- [ ] **Review tags carried forward**: every `Reviewed-by:`/`Tested-by:` from an
+      earlier version is on the reposted patch; changelog is below the `---`; the
+      generated patch body was not hand-edited.
 - [ ] DT work is **warning-free** — and measured as a **differential**, because this
       base fails `dtbs_check` 44 times by itself. `make dt_binding_check` for every
       binding touched, `yamllint` against the bindings' own config, and `CHECK_DTBS=y`
@@ -1378,6 +1475,20 @@ guides. When in doubt, these are the ground truth:
 - <https://opensource.com/article/18/8/first-linux-kernel-patch>
 - <https://www.linaro.org/blog/becoming-a-kernel-developer-part1-posting-your-first-patch/>
 - <https://nickdesaulniers.github.io/blog/2017/05/16/submitting-your-first-patch-to-the-linux-kernel-and-responding-to-feedback/>
+
+**Kernel review tooling — prior art the "Self-review" pass is built on**
+- The submit checklist enumerated in that pass:
+  <https://docs.kernel.org/process/submit-checklist.html>
+- `jlelli/claude-kernel-reviews` — a kernel developer's Claude Code review
+  workflow (b4 + semcode-index + W=1/sparse/coccicheck per patch):
+  <https://github.com/jlelli/claude-kernel-reviews>
+- *Sashiko* — an agentic list-watching reviewer, notable for verifying findings
+  before propagating them:
+  <https://mcpmarket.com/tools/skills/sashiko-kernel-patch-reviewer>
+- kernelnewbies PatchTipsAndTricks — revision/repost mechanics and the review
+  comments to expect: <https://kernelnewbies.org/PatchTipsAndTricks>
+- Andi Kleen, *On submitting kernel patches* (a classic catalogue of the comments
+  reviewers give): <https://halobates.de/on-submitting-patches.pdf>
 
 ## Feeding the method back
 
