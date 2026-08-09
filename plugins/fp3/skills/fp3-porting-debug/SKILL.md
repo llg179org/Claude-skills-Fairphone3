@@ -250,6 +250,22 @@ than a deleted one.
   recipe, and the measured proof that a USB replug **cannot** be emulated from the host,
   is under "Unattended access" in the repository README.
 
+- **A USB-unplug-proof link exists, and it is the one to use whenever the charger or
+  the USB port is being manipulated.** The phone usually also holds a WiFi address on
+  the *host's own subnet* — check `ip -4 -o addr` on both ends — so SSH to that address
+  survives unplugging the USB gadget link (whose `172.16.42.1` dies with it). Measure
+  the address each session; DHCP moves it. **Harden that path key-only** once it is a
+  routable LAN address: a global `PasswordAuthentication no` + `KbdInteractiveAuthentication
+  no` at the end of `sshd_config`, then `Match Address <usb-net>` re-enabling both so the
+  physically-local USB link keeps a password fallback. Four traps cost real time:
+  the binary is **`sshd.pam`**, not `sshd` (so `sshd.pam -t` validates); `Match Address`
+  **rejects `*`** and **rejects a CIDR whose host bits are not zero** (`172.16.42.0/16`
+  is an error — use the network address `172.16.0.0/16`); with `UsePAM yes` **both**
+  auth options must be off or PAM keyboard-interactive still serves passwords; and a
+  `systemctl reload` (SIGHUP) makes sshd re-exec, so connections are briefly refused —
+  retry before concluding a lockout. Always `sshd.pam -t` and keep a `.bak` before reload;
+  key auth is untouched, so a password-only misconfiguration cannot lock a key user out.
+
 - **The vendor's full 4.9 source is on disk, not just its device trees.** Register
   maps, scaling tables and the reasons behind a downstream device-tree value live in
   the *drivers* (`drivers/power/supply/qcom/`, `sound/soc/msm/`, …), and that tree is
