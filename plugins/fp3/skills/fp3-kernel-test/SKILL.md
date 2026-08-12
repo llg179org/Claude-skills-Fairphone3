@@ -320,9 +320,28 @@ grep-able breadcrumb (`dev_info(dev, "DBG …")`) so the capture can *prove the 
 path ran* — otherwise a null result is ambiguous between "hypothesis wrong" and
 "code didn't execute".
 
-### Step 1 — Choose the lightest deploy vehicle that carries the change
-This is the biggest lever on iteration speed. Match the vehicle to the blast
-radius of your edit:
+### Step 0a — ☠️ Re-measure that the bug still reproduces, before you build the fix
+A parked item carries a diagnosis, and a diagnosis has a shelf life. The device
+has moved since it was written: a different kernel, a different userspace
+package, a different runtime state. **Re-run the failing measurement first** —
+it costs one command against the twenty to forty minutes of a package build,
+and it decides whether the "one-line fix" is a fix or a change.
+
+The check that catches a stale diagnosis is not "does it still fail" alone but
+**does the mechanism still apply**: name the quantity the old explanation
+depends on, and read it while the operation runs. A resource that the failing
+path is supposed to consume must visibly move. If it does not move, the path
+does not go through it, whatever the old error message said — and then neither
+does the fix.
+
+Two ways this shows up, both real here:
+* the operation now **succeeds**, so the item is closed rather than fixed;
+* the operation still fails, but through a different resource, so the fix aims
+  at the wrong one.
+
+Watch for an error message that names a *size*: match it against the sizes you
+can see. A byte count that turns out to be exactly some other buffer tells you
+which allocation failed, which is often not the one the note blamed.
 
 - **One loadable module changed → hot-swap the `.ko` (fastest, ~2 min, no flash).**
   How: build, confirm the module's **vermagic matches the running kernel**
@@ -809,6 +828,22 @@ always.
 Two things it does not replace: the package is still what gets installed, and
 the artifact gate below still applies to whatever you deploy.
 
+☠️ **Waiting for that build: `pgrep -f` matches the waiter itself.** A loop like
+`while pgrep -f 'pmbootstrap.*build' >/dev/null; do sleep 45; done` never exits,
+because the pattern appears in the loop's own `bash -c` command line — so the
+wait reports "still building" forever, including long after the build has
+finished, and the same false positive makes a "is it running?" spot-check
+useless. Wait on something that cannot match itself:
+
+```sh
+P=$(pgrep -af pmbootstrap.py | grep -v 'bash -c' | awk '{print $1}' | head -1)
+while [ -d /proc/$P ]; do sleep 45; done
+```
+
+Better still, wait on the **artifact** — `until [ -f <the .apk> ]` — since that
+is what the next step actually needs, and it cannot be faked by a process list.
+The same trap applies to `pkill -f`: it will kill your own shell.
+
 ### Fast compile-check with `envkernel` (no device, catches your edits)
 
 `pmbootstrap`'s `helpers/envkernel.sh`, sourced from the kernel dir, wraps `make`
@@ -1253,6 +1288,34 @@ echo 1 > /sys/kernel/tracing/events/kprobes/enable
     outer tee-pipe to carry it. (Worked example, folyt.134: the FRS6 onboard truncated at
     `-- deploy FRS6 --` and lost the readout under the tee-pipe; the v2 runner writing the readout
     with `> $RES; sync` first captured it on the first try.)
+
+### Did it actually suspend? Compare the two clocks, do not trust the counter
+- **Answers:** is this phone entering system suspend while idle — on either slot,
+  without root, and without leaving anything running that would keep it awake?
+- **Why the obvious instrument lies:** `/sys/power/suspend_stats/success` (or the
+  4.x `/sys/kernel/debug/suspend_stats`) counts **since boot**. Read it on a
+  freshly booted slot — which is exactly what a slot switch gives you — and a `0`
+  means "not yet", not "never". A counter whose window you did not choose is not
+  a measurement.
+- **How:** `CLOCK_MONOTONIC` does not advance across a suspend, so sample the
+  monotonic clock against the wall clock twice, with an idle gap between:
+  ```sh
+  echo "$(date +%s) $(cut -d. -f1 /proc/uptime)"   # ... wait ... then again
+  ```
+  Δwall == Δuptime → awake the whole time. Δuptime < Δwall → it slept, and the
+  difference is how long for. No root, no debugfs, works identically on a vendor
+  4.x kernel and on mainline, which is what makes it usable for a two-sided diff.
+- **Interpret:** before concluding "one OS sleeps and the other does not",
+  measure **both** sides this way. A power gap between two slots is only a
+  suspend difference if one of them actually suspends; otherwise you are
+  comparing two awake systems and the answer is in what each keeps awake —
+  `runtime_status` across `/sys/bus/*/devices/*/power/`, compared side by side.
+- **Related nodes worth reading, and one to avoid:** `/sys/power/autosleep`
+  present ⇒ `CONFIG_PM_AUTOSLEEP`, opportunistic Android-style sleep;
+  `/sys/power/wake_lock` present ⇒ `CONFIG_PM_WAKELOCKS`, i.e. a userspace
+  daemon decides. ☠️ **Do not `cat /sys/power/wakeup_count` in a scripted
+  capture** — it blocks until the count is stable and will hang the whole
+  command with no output.
 
 ### Runtime-PM as a reboot-free re-trigger for a "boot-time-once" event (the lightest lever)
 - **Answers:** is a co-processor init you *assumed* was boot-only actually a runtime,
