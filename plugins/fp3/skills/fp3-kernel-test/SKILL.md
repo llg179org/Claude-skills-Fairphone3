@@ -247,6 +247,10 @@ cost a device, a boot, or a wrong conclusion at least once.
 - The IIO device index moves between boots — match on `name`.
 - Taking `DBUS_SESSION_BUS_ADDRESS`/`XDG_RUNTIME_DIR` by hand diagnoses a dead session as a broken daemon.
 - Your own cleanup destroys evidence — `journalctl --vacuum-size` faked a perfect cross-boot correlation.
+- ☠️ **A quantity the environment also drives is not evidence about the device.** A phone that stayed 8 °C warmer than the other one looked like it was dissipating more, and was offered as one of three supporting signals; the two runs were simply night and day, in summer. Before a reading counts as a difference between the systems, name what else moves it and show that thing was held still.
+- ☠️ **A periodic sampler measures the load at the instant it is itself running.** A once-a-minute logger wakes the phone, reads the current, and records a moment of its own making, which biases the mean upward and does so identically on both sides — so the *difference* survives but the absolute figure does not. Say which it is before quoting a number.
+- ☠️ **Measurement data does not live in the session scratchpad.** A host reboot took a four-hour charge curve with it, and only the analysis printed earlier survived. Copy a capture somewhere durable the moment it is worth anything, not at the end of the session.
+- ☠️ **A comment inherited across a driver family describes the generation it was written for.** `qcom_smbx` carried an SMB2 note reading "I_TERM_BIT - Current termination ?? 0 = enabled", question marks and all, and cleared that bit on an SMB5 PMIC where the vendor sets it — which is what stopped the charger ever terminating. The two question marks were the author saying they did not know. Treat a hedged comment about a register as an open question, and settle it against the vendor's own programming of *that* generation.
 - `pkill -f <pattern>` matches your own command line. Use `pkill -x <name>`.
 - `pgrep -f` does too — an `until ! pgrep -f …` waiter never exits. Wait on the artifact.
 - The loudest error line is not the error — reconstruct the causal order before interpreting.

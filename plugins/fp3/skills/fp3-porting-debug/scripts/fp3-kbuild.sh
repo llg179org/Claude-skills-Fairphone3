@@ -13,8 +13,19 @@
 # Usage, from anywhere:
 #   fp3-kbuild.sh setup [tree]        # one time per tree: prepare .output/.config
 #   fp3-kbuild.sh <make args...>      # e.g. drivers/media/platform/qcom/camss/
+#   fp3-kbuild.sh Image modules       # first build on a fresh tree, see below
 #   fp3-kbuild.sh modules             # everything loadable, incrementally
 #   fp3-kbuild.sh ko <module-name>    # print the path of a freshly built .ko
+#
+# Builds run at -j$(nproc); override with FP3_KJOBS.
+#
+# ☠️ `modules` alone cannot work on a tree that has never built vmlinux.o:
+# scripts/Makefile.modpost falls back to `modules-only.symvers` and runs modpost
+# without it, so every symbol exported by built-in (=y) code comes back
+# undefined - tens of thousands of them, naming things like kernel_neon_begin
+# that are obviously not the fault of whatever you changed. The one-line tell is
+# "WARNING: vmlinux.o is missing" just above. Build `Image modules` once per
+# fresh .output; after that Module.symvers exists and `modules` is incremental.
 #
 # The tree defaults to the branch the package pins (debug-int), because that is
 # what the phone runs; override with FP3_KTREE.
@@ -27,7 +38,20 @@ set -u
 PMOS="${FP3_PMOS:-/mnt/1TB/pmos}"
 TREE="${FP3_KTREE:-$PMOS/fp3-sensors-wt}"     # debug-int/<base>: what the phone runs
 CONFIG="${FP3_KCONFIG:-$PMOS/pmaports/device/testing/linux-fp3/config-fp3.aarch64}"
+APKBUILD="${FP3_KAPKBUILD:-$PMOS/pmaports/device/testing/linux-fp3/APKBUILD}"
 ENVKERNEL="$PMOS/pmbootstrap/helpers/envkernel.sh"
+
+# ☠️ envkernel builds its make command with no -j at all: it is written to be
+# sourced into an interactive shell, where you type the -j yourself. Driven from
+# a script the omission is invisible and costs hours - measured here, a from-
+# scratch vmlinux ran one compiler at a time on a six-core machine and was still
+# in lib/ after two hours nineteen. So pass one; the tell that it is missing is
+# a single cc1/clang in `pgrep -c`, not anything in the log.
+#
+# Two cores are left free rather than filling the machine: this is a desktop
+# somebody is using while the build runs, and a build that makes the session
+# stutter gets killed, which costs more than the two cores ever save.
+JOBS="${FP3_KJOBS:-$(( $(nproc) > 2 ? $(nproc) - 2 : 1 ))}"
 
 die() { echo "fp3-kbuild: $*" >&2; exit 1; }
 
@@ -45,6 +69,13 @@ cd "$TREE" || die "cannot enter $TREE"
 # tree makes the outputmakefile target fail.
 [ -e .config ] && die "remove the stray .config in $TREE — with O=.output it lives in .output"
 
+# ☠️ Do not treat envkernel's own exit status as failure. It returns non-zero
+# in situations that have nothing to do with the setup succeeding - the
+# "your chroots are older than two days" advisory is one, which means a script
+# that gates on the status starts failing on a a calendar boundary, days after
+# it last worked and with nothing having changed. What matters is whether it
+# set $pmbootstrap, so test that instead.
+#
 # envkernel is written to be sourced into an INTERACTIVE shell, and it fights a
 # script two ways. It exposes `pmbootstrap` and `make` as shell ALIASES, which a
 # non-interactive script never expands ("pmbootstrap: command not found"); and
@@ -77,19 +108,67 @@ setup)
     mkdir -p .output
     chmod 0777 .output 2>/dev/null || true
     cp "$CONFIG" ./fp3-kbuild.config || die "cannot stage the config in the tree"
-    ( set +u; set --  # envkernel is not set -u clean, and `.` passes our $@ ("setup") to it
+
+    # ☠️ Everything below happens inside ONE sourcing of envkernel, on purpose.
+    # Each sourcing tries to umount /mnt/linux in the chroot and bind-mount it
+    # again; when the umount fails as busy it mounts *on top* rather than
+    # erroring, so every extra invocation leaves another layer behind. Over a
+    # session of many small calls the mount namespace fills up, and what that
+    # looks like is nothing to do with mounts: "No space left on device" with
+    # hundreds of gigabytes free, a df that hangs, and a desktop that stutters
+    # because every /proc read now walks a vast mount table.
+    #
+    # ☠️ The config file is NOT the device's config. The package copies it and
+    # then turns a list of symbols on in prepare(), because the inherited
+    # upstream config enables none of them - the charger, the codec, the
+    # speaker amp, the camera sensors, the panel, SLIMbus. Build from the file
+    # alone and every one of those is silently absent: the build is green, the
+    # modules link, and the ones you came for were never in it. Nothing warns,
+    # because not building a driver is a legitimate configuration.
+    #
+    # The list is replayed out of the APKBUILD rather than restated here, so it
+    # cannot drift from the package - and the drift's symptom would again be an
+    # absence. Comments are stripped first: prepare() explains a renamed symbol
+    # by naming the old one, and taking that literally fails the gate below on a
+    # symbol that is supposed to be absent.
+    SYMS=$(sed -n '/^prepare()/,/^}/p' "$APKBUILD" 2>/dev/null |
+               grep -v '^[[:space:]]*#' |
+               grep -oE 'CONFIG_[A-Z0-9_]+' | sort -u)
+    [ -n "$SYMS" ] || die "found no CONFIG_* to enable in $APKBUILD prepare()"
+
+    CFGARGS=()
+    for c in $SYMS; do CFGARGS+=(--module "$c"); done
+
+    ( set +u; set --  # envkernel is not set -u clean, and `.` passes our $@ to it
       # shellcheck disable=SC1090
-      . "$ENVKERNEL" >/dev/null 2>&1 || exit 1
+      . "$ENVKERNEL" >/dev/null 2>&1
+      [ -n "${pmbootstrap:-}" ] || { echo "envkernel did not set \$pmbootstrap" >&2; exit 1; }
+
       "$pmbootstrap" -q chroot --user -- cp /mnt/linux/fp3-kbuild.config \
-                                            /mnt/linux/.output/.config ) \
-        || die "could not place the config into .output through the chroot"
+                                            /mnt/linux/.output/.config || exit 1
+      _envmake olddefconfig || exit 1
+      # One chroot call with every --module, not one per symbol: entering the
+      # chroot is not free, and pmbootstrap passes argv straight through, so no
+      # shell is involved - a `sh -c "cd X && Y"` here loses its quoting and
+      # silently runs Y in the wrong directory.
+      "$pmbootstrap" -q chroot --user -- /mnt/linux/scripts/config \
+          --file /mnt/linux/.output/.config "${CFGARGS[@]}" || exit 1
+      _envmake olddefconfig || exit 1 ) \
+        || die "could not prepare .output/.config through the chroot"
+
     rm -f ./fp3-kbuild.config
-    ( set +u; set --  # envkernel is not set -u clean, and `.` passes our $@ ("setup") to it
-      # shellcheck disable=SC1090
-      . "$ENVKERNEL" >/dev/null 2>&1 || exit 1
-      _envmake olddefconfig ) \
-        || die "olddefconfig failed"
+
+    # And gate on the result, because --module is not a promise: a symbol whose
+    # dependencies are unmet is dropped by olddefconfig without a word, which is
+    # exactly how a renamed symbol disappears across a version bump.
+    missing=
+    for c in $SYMS; do
+        grep -qE "^$c=(m|y)$" .output/.config || missing="$missing $c"
+    done
+    [ -z "$missing" ] || die "these did not survive olddefconfig:$missing"
+
     echo "fp3-kbuild: $TREE is set up; .output/.config from $(basename "$CONFIG")"
+    echo "fp3-kbuild: $(echo "$SYMS" | wc -l) symbols enabled from $(basename "$(dirname "$APKBUILD")")/APKBUILD, all present"
     ;;
 ko)
     [ $# -ge 2 ] || die "usage: fp3-kbuild.sh ko <module-name>"
@@ -104,7 +183,8 @@ ko)
       _args=( "$@" ); set -- # and `.` passes our positional params to what it sources,
                              # so save the make args, then clear $@ before sourcing
       # shellcheck disable=SC1090
-      . "$ENVKERNEL" >/dev/null 2>&1 || exit 1
-      _envmake "${_args[@]}" )
+      . "$ENVKERNEL" >/dev/null 2>&1
+      [ -n "${pmbootstrap:-}" ] || exit 1
+      _envmake -j"$JOBS" "${_args[@]}" )
     ;;
 esac

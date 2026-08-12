@@ -57,7 +57,19 @@ def show(val):
         return "u32:"+",".join("0x%x"%u32(val,k) for k in range(0,len(val),4))
     return "raw:"+val.hex()
 
-for path in sys.argv[1:]:
+# By default this prints the SLIMbus/BAM nodes it was written for. `--node SUBSTR`
+# points it at any other node instead and prints every property of the matches,
+# so the same reader answers "is my property actually in this DTB?" for any
+# subsystem - which is the artifact gate a DT change has to pass before it is
+# deployed.
+args = sys.argv[1:]
+node_filter = None
+if "--node" in args:
+    k = args.index("--node")
+    node_filter = args[k + 1].lower()
+    del args[k:k + 2]
+
+for path in args:
     data=open(path,"rb").read()
     fdts=find_fdts(data)
     print(f"=== {path}: {len(fdts)} FDT blobs ===")
@@ -66,7 +78,8 @@ for path in sys.argv[1:]:
         try: nodes=parse(blob)
         except Exception as e:
             print(f"  @{off:#x} parse err {e}"); continue
-        hits=[n for n in nodes if any(k in n[0].lower() for k in ("slim","bam"))]
+        keys = (node_filter,) if node_filter else ("slim", "bam")
+        hits=[n for n in nodes if any(k in n[0].lower() for k in keys)]
         if not hits: continue
         # model
         model=""
@@ -75,6 +88,11 @@ for path in sys.argv[1:]:
                 model=show(props["model"]); break
         print(f"  @{off:#x} size={total} {model}")
         for p,props in hits:
+            if node_filter:
+                print(f"    {p}")
+                for k,v in props.items():
+                    print(f"       {k} = {show(v)}")
+                continue
             if p.count("/")>4: continue
             interesting={k:v for k,v in props.items() if k in
               ("compatible","reg","qcom,ee","qcom,bam-pipes","qcom,ngd-pipes","dmas","dma-names",
