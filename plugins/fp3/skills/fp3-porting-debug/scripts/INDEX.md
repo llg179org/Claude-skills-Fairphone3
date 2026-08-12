@@ -160,6 +160,8 @@ directory.
 |---|---|
 | `discharge.sh` | GYORS AKKU-MERÍTÉS a duty-cycle charger-teszthez. pmOS-ben NINCS töltés → ott full terheléssel fogyasztjuk az akkut, amíg a TWRP-ben |
 | `charge-test.sh` | DUTY-CYCLE töltés-teszt harness (user-protokoll: rövid pmOS burst → TWRP hő-ellenőrzés). Cél: kísérleti charger-kód TERMIKUSAN biztonságos tesztelése … |
+| `powerlog-pmos.sh` | One line a minute of the pmOS power state, same fields and in the same order as `powerlog-ut.sh`, so the two files diff directly. Install it as a *system* unit, not with systemd-run: a transient unit dies at the next reboot and takes the measurement with it. |
+| `powerlog-ut.sh` | The same on Ubuntu Touch. Percent is not comparable between the two, since they run different gauges — compare the integrated current and the terminal voltage. Both sample while the logger itself is awake, which biases the mean upward the same way on each side. |
 | `fg-verify.sh` | fg-verify.sh — fuel-gauge (pmi632-battery) ellenőrzés pmOS-ben SSH-n. Kiolvassa a battery-psy capacity/voltage/status mezőit és a charger-psy-t, |
 | `gen_ocv.py` | row-legend (centi-percent) and 25C column (3rd value, units of 100uV) from Kayo v1-lut |
 | `thermprobe.sh` | Per-zóna thermal-mintázás sha256sum-load alatt: melyik szenzor megbízható? |
