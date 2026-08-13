@@ -840,6 +840,15 @@ P=$(pgrep -af pmbootstrap.py | grep -v 'bash -c' | awk '{print $1}' | head -1)
 while [ -d /proc/$P ]; do sleep 45; done
 ```
 
+☠️ **The same self-match is fatal, not merely useless, with `pkill -f`** — and
+it bites hardest over SSH, where the pattern travels inside the remote shell's
+own command line. `ssh dev 'pkill -f "sleep 100000"; echo done'` kills the
+`sh -c` that is running it: the remote command dies mid-way, `done` is never
+printed, and the call returns **no output and no error**, which reads exactly
+like a lost link. Kill by PID instead, found without the pattern being on any
+command line — for device nodes that means walking `/proc/*/fd` and killing the
+holder you actually meant.
+
 Better still, wait on the **artifact** — `until [ -f <the .apk> ]` — since that
 is what the next step actually needs, and it cannot be faked by a process list.
 The same trap applies to `pkill -f`: it will kill your own shell.
@@ -1289,22 +1298,34 @@ echo 1 > /sys/kernel/tracing/events/kprobes/enable
     `-- deploy FRS6 --` and lost the readout under the tee-pipe; the v2 runner writing the readout
     with `> $RES; sync` first captured it on the first try.)
 
-### Did it actually suspend? Compare the two clocks, do not trust the counter
+### Did it actually suspend? Difference the counter, and validate the detector first
 - **Answers:** is this phone entering system suspend while idle — on either slot,
-  without root, and without leaving anything running that would keep it awake?
+  without leaving anything running that would keep it awake?
 - **Why the obvious instrument lies:** `/sys/power/suspend_stats/success` (or the
   4.x `/sys/kernel/debug/suspend_stats`) counts **since boot**. Read it on a
   freshly booted slot — which is exactly what a slot switch gives you — and a `0`
   means "not yet", not "never". A counter whose window you did not choose is not
-  a measurement.
-- **How:** `CLOCK_MONOTONIC` does not advance across a suspend, so sample the
-  monotonic clock against the wall clock twice, with an idle gap between:
+  a measurement. The fix is not to abandon it but to **difference it**: read it
+  at both ends of a window you chose, in one boot.
+- **The second instrument, and why it is a trap:**
   ```sh
   echo "$(date +%s) $(cut -d. -f1 /proc/uptime)"   # ... wait ... then again
   ```
-  Δwall == Δuptime → awake the whole time. Δuptime < Δwall → it slept, and the
-  difference is how long for. No root, no debugfs, works identically on a vendor
-  4.x kernel and on mainline, which is what makes it usable for a two-sided diff.
+  This looks like it compares the wall clock against `CLOCK_MONOTONIC`, which
+  would stop across a suspend. ☠️ **It does not.** `/proc/uptime` calls
+  `ktime_get_boottime_ts64()`, and **boottime includes suspended time** — so
+  Δuptime tracks Δwall whether the phone slept or not, and the comparison reads
+  identically on a sleeping and a waking phone. Measured against a proven 60 s
+  sleep: 71 s of wall clock, 71 s of uptime.
+- **What does work:** the counter differenced across your window, and
+  `dmesg | grep 'PM: suspend'` — the `entry (s2idle)` / `exit` pair. Note the
+  printk clock also stops while suspended, so a 60 s sleep shows as a fraction
+  of a second between the two lines: the **pair** is the evidence, not the gap.
+- ☠️ **Validate any suspend detector against a known positive before trusting a
+  negative.** `rtcwake -m mem -s 60` makes one on demand, in a minute, and a
+  detector nobody has seen fire is not evidence of absence. This is the general
+  form of the mistake above: a replacement instrument was adopted because the
+  first one was caught lying, and was never itself fired in anger.
 - **Interpret:** before concluding "one OS sleeps and the other does not",
   measure **both** sides this way. A power gap between two slots is only a
   suspend difference if one of them actually suspends; otherwise you are
