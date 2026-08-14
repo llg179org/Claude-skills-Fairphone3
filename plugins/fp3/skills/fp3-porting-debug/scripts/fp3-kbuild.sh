@@ -32,6 +32,12 @@
 #
 # ☠️ envkernel forces CCACHE_DISABLE=1, so the *first* full build here is not
 # faster than the package one. The point is every build after it.
+#
+# ☠️ Never run this while `pmbootstrap build linux-fp3` is in flight. Both
+# bind-mount the source at /mnt/linux inside the same native chroot, and the
+# collision is invisible until the package build tears down: it dies with
+# `Command failed (exit code 32): sudo umount .../chroot_native/mnt/linux`,
+# minutes after the run that broke it, looking like a chroot bug. One at a time.
 
 set -u
 
