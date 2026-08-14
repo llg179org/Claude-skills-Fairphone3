@@ -351,6 +351,17 @@ which allocation failed, which is often not the one the note blamed.
   through the full probe path). Why it's safe: nothing on-disk except one file
   changes; if it's wrong you just restore the backup. (Worked example: the SLIMbus
   fix touches only `slim-qcom-ngd-ctrl.ko`; hot-swap beat a full flash every time.)
+  - **☠️ Vermagic matching is necessary and not sufficient — check the compiler too.**
+    Vermagic covers the version string and the SMP/preempt flags; it says nothing about
+    which toolchain built the object. Build the module with clang while the running
+    kernel came from gcc and `insmod` **succeeds**, then throws a `ftrace_bug` WARN at
+    `ftrace_process_locs`: the two compilers lay out the ftrace call sites differently.
+    The module works — only its tracing records are dropped — so the WARN is easy to
+    scroll past and conclude nothing. Read the toolchain off `/proc/version` on the
+    device and off the package recipe (`CC=` in the APKBUILD), and make the build match.
+    Note this is a property of the *measurement vehicle*, not of the change under test:
+    the package builds itself with its own compiler, so the mismatch never ships. Do not
+    report it as a defect in the code you are testing.
   - **☠️ `rmmod`+`modprobe` reloads the code but does NOT re-run the co-processor bring-up past
     the boot's FIRST cycle.** The first reload's `.probe()` re-runs the full path (worked once on
     `slim_qcom_ngd_ctrl`, ~15 s, needs `lsmod` used-by=0), but a *second* reload gives no new
@@ -948,6 +959,35 @@ Three things that belong to the *method* rather than the procedure:
   compositor was alive and the *shell* process absent, and the confirmation was in
   the package manager's own log, not in the journal.)
 
+- ☠️ **A file you hand-placed into a package-owned path is borrowed, not held —
+  and `ls` cannot tell you it is still yours.** Every override copied over a
+  distro file is undone by the next upgrade of the package owning it, silently
+  and at a time unrelated to whatever you are debugging that day. Two cheap
+  habits follow:
+  * **Ask who owns the path before relying on the copy** (`apk info -W <path>`).
+    If a package owns it, the override is temporary by construction: ship it in a
+    package that replaces the file, or put it where nothing owns it. Where
+    neither is possible yet, assert the file's **identity** in the regression
+    suite, so the revert is caught by a test instead of by a user.
+  * **Presence is not identity.** The file being there proves nothing — the stock
+    file occupies the same path with the same name and mode, and reads as
+    correctly installed. Compare against the repo copy (size, then diff) before
+    concluding the layer is configured the way you wrote it.
+
+  The debugging consequence is the sharper half: **before bisecting the layer
+  underneath a failing component, verify that the configuration that component
+  actually loaded is yours.** A stock config in your file's place fails
+  identically on every version of the layer below, so an A/B against the layer
+  below answers "not a regression" — a true statement, reached without touching
+  the cause, at the price of a flash cycle. Reading the config the failing layer
+  loaded is one command, and it names the fault outright.
+  (Third instance of this in the port at the time of writing, which is why it is
+  a rule here rather than three stories: a hand-deployed DTB replaced through the
+  mkinitfs trigger, a distro environment file overriding a renderer choice, and a
+  UCM verb whose replacement by the distro's stock file took the microphone out.
+  In each the symptom pointed at the kernel and the cause was the package
+  manager.)
+
 - ☠️ **A wrapper's exit status is not the build's.** Running a build in the
   background as `(cmd > log 2>&1; echo EXIT=$?)` reports the *subshell's* status,
   so a harness watching for completion announces success for a build that failed.
@@ -1325,12 +1365,63 @@ echo 1 > /sys/kernel/tracing/events/kprobes/enable
   negative.** `rtcwake -m mem -s 60` makes one on demand, in a minute, and a
   detector nobody has seen fire is not evidence of absence. This is the general
   form of the mistake above: a replacement instrument was adopted because the
-  first one was caught lying, and was never itself fired in anger.
+  first one was caught lying, and was never itself fired in anger. The same rule
+  applies to any **guard** on an unattended run, and with worse consequences —
+  see "A fact you established an hour ago does not retrieve itself" in
+  `fp3-porting-debug`.
 - **Interpret:** before concluding "one OS sleeps and the other does not",
   measure **both** sides this way. A power gap between two slots is only a
   suspend difference if one of them actually suspends; otherwise you are
   comparing two awake systems and the answer is in what each keeps awake —
   `runtime_status` across `/sys/bus/*/devices/*/power/`, compared side by side.
+- ☠️ **The pair proves that it slept, never how long.** Both the printk clock and
+  `CLOCK_MONOTONIC` stop across s2idle, so an eight-minute sleep reads as half a
+  second between `entry` and `exit`. To measure the **duration**, leave a
+  wall-clock logger running and read the **gap in its output**:
+  ```sh
+  systemd-run --unit=sleepwatch --collect /tmp/sleepwatch.sh   # loop: date; counters; sleep 5
+  ```
+  `systemd-run --collect` is what makes it survive both the suspend and the SSH
+  session dropping — a plain backgrounded job does not.
+- ☠️ **Your own polling can be the wake source.** If the WiFi RX interrupt is
+  wake-armed, an SSH probe is an experiment, not an observation. Log on the
+  device and read the log *afterwards*; do not poll a phone whose sleep you are
+  measuring. Worth checking rather than assuming in both directions: a phone can
+  also be unreachable — `No route to host` — while an interrupt is nominally
+  wake-armed, because the firmware stops forwarding.
+
+### Which interrupts can wake this phone, and why a peripheral event does not
+- **Answers:** the event reached the hardware and the phone stayed asleep — is
+  the line simply not armed as a wake source?
+- **Enumerate what is armed** (usually a startlingly short list):
+  ```sh
+  for d in /sys/kernel/irq/*; do [ "$(cat $d/wakeup 2>/dev/null)" = enabled ] &&
+      echo "irq ${d##*/} $(cat $d/actions)"; done
+  find /sys/devices -name wakeup -path "*/power/*" | while read f; do
+      echo "$(cat $f) ${f%/power/wakeup}"; done      # device-level knobs
+  ```
+  A device-level knob reading `enabled` does **not** make `/sys/kernel/irq/N/wakeup`
+  read `enabled` while awake — a dedicated wake IRQ is armed at suspend time. Do
+  not read that as the setting having failed.
+- **Map an IRQ back to the device tree** before believing it is the right line:
+  `/proc/interrupts` gives `GIC-0 <n>`, and the DT's `GIC_SPI m` is `m + 32`. Do
+  this — several edges of one driver share a name, and picking the wrong one makes
+  any conclusion arbitrary.
+- **Interpret:** during s2idle `suspend_device_irqs()` masks every non-wake IRQ.
+  The event is not lost, it waits and is **replayed at resume** — which is why the
+  symptom is often a stale event processed the instant the user wakes the phone by
+  hand, rather than nothing happening at all.
+- **Prove which line the event travels before writing code for one.** Counters
+  differenced across the sleep answer it: a line whose count did not move once is
+  not the line, whatever its name suggests. Arming a plausible-sounding wake
+  source and seeing no change is a *negative result about that source*, and worth
+  as much as a positive one.
+- **Fixing it when a driver offers no knob:** the pattern to copy is
+  `device_set_wakeup_capable(dev, true)` + `dev_pm_set_wake_irq(dev, irq)`, left
+  **disabled by default** so userspace decides. Register it after the device
+  exists (`device_register()` first) or the sysfs attribute never appears. Check
+  whether the subsystem already does this somewhere — an in-tree precedent in the
+  same directory is both the design and the upstream argument.
 - **Related nodes worth reading, and one to avoid:** `/sys/power/autosleep`
   present ⇒ `CONFIG_PM_AUTOSLEEP`, opportunistic Android-style sleep;
   `/sys/power/wake_lock` present ⇒ `CONFIG_PM_WAKELOCKS`, i.e. a userspace

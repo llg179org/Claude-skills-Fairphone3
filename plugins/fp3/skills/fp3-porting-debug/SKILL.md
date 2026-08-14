@@ -250,6 +250,19 @@ than a deleted one.
   recipe, and the measured proof that a USB replug **cannot** be emulated from the host,
   is under "Unattended access" in the repository README.
 
+- **☠️ To run something on the phone that must outlive the SSH session, use
+  `systemd-run`, not backgrounding.** Any measurement that suspends the device, cycles
+  USB, or simply runs longer than the connection will lose its shell, and the usual
+  incantations do not save it here: both `sudo … setsid nohup script &` and
+  `sudo … setsid sh -c "nohup script &"` were measured dying — one left no output file
+  at all, the other a log truncated at the first few lines, which reads exactly like the
+  script crashing at whatever it was about to do. That misreading is the real cost: the
+  hunt starts on the wrong side. What survives is
+  `sudo systemd-run --unit=<name> --collect /bin/sh /tmp/script.sh`, with the script
+  redirecting its own output to a file; check it with `systemctl is-active <name>` and
+  read the file afterwards. `--collect` drops the unit when it exits, so the name is
+  free to reuse next round.
+
 - **A USB-unplug-proof link exists, and it is the one to use whenever the charger or
   the USB port is being manipulated.** The phone usually also holds a WiFi address on
   the *host's own subnet* — check `ip -4 -o addr` on both ends — so SSH to that address
@@ -395,6 +408,111 @@ terms of what question each answers:
   touching the Sailfish build**, the build environment is the hard part.
 - Boot-blind bring-up techniques (below) are shared with this track.
 
+## A fact you established an hour ago does not retrieve itself
+
+The expensive mistakes in this work are rarely things nobody knew. They are
+things **you** established, wrote down, and then did not consult while writing
+the code that violated them — because the finding was filed under *analysis* and
+the violation was written under *plumbing*, and plumbing feels routine enough to
+skip review. Knowing the fact harder does not help. Only retrieval helps, and
+retrieval has to be engineered.
+
+**Index each finding by an identifier you will literally type**, not by its
+topic. A note filed under "the fuel gauge" is found only by someone already
+thinking about the fuel gauge — precisely the person who does not need it. A
+note filed under the symbol is found by grep, by autocomplete, and by eye:
+
+```
+capacity, charge_now   → frozen across a suspend; never guard or gate on these
+/proc/uptime           → boottime, includes suspended time; cannot detect sleep
+pkill -f <pattern>     → over SSH it matches the calling shell; kill by PID
+```
+
+**Keep the ledger short enough to re-read** — about a screen, this session only.
+Past that it has stopped being an instrument and become an archive.
+
+**Schedule the retrieval, because it will not happen on its own.** Before
+anything unattended, irreversible or outward-facing, grep the plan and the
+script for every identifier in the ledger. That single step is the method; the
+rest exists to make the grep possible.
+
+**Annotate at the point of use.** The constraint belongs in the file where the
+violating line will be written — a comment beside the guard, or better a check
+that fails. A fact three directories away has to be remembered; a fact on the
+adjacent line has to be actively ignored, which is much harder.
+
+☠️ **Fire every detector once against a known positive.** Anything whose job is
+to detect, guard or prevent must be *watched doing it* before it is trusted: set
+the threshold so it must trigger, see it trigger, set it back. Thirty seconds.
+This is the only step that also covers the facts you never established, and it
+is what separates a guard that works from a guard that has simply never been
+observed failing to work.
+
+**Weight review by consequence, not by interest.** The rail that bounds the
+damage deserves more scrutiny than the measurement that produces the result: the
+measurement's failure mode is a wasted run, the rail's is unbounded. The natural
+instinct is the reverse, and it is wrong. For anything unattended, add a second,
+independent bound — a wall-clock limit sized to the risk — because a single
+guard that turns out to be blind is indistinguishable from no guard at all.
+
+## Is that number a decision, a construction, or an observation?
+
+Every value in the system is one of three things, and the difference is invisible
+once it is a literal:
+
+* **a decision** — we chose it; it is true because we said so;
+* **a property of the construction** — it cannot vary: a register offset, a
+  protocol constant, a physical constant;
+* **an observation about one instance of the world** — true of this unit, this
+  revision, right now.
+
+The bug is writing the third kind as if it were one of the first two, because a
+literal discards the observation's scope. A JEITA threshold is not "a number", it
+is *a claim about the battery pack in this phone* — and a phone model that ships
+two different packs makes that claim device-specific.
+
+**One question decides it:**
+
+> Could two devices, both running this code correctly, disagree about this
+> number?
+
+If yes, the value belongs to the device rather than to the source, and it has to
+be measured — or at the very least verified. The question needs no knowledge of
+the hardware; it only needs to be asked.
+
+**Record what the number is a claim about, not where it was copied from.** ☠️ A
+citation names the *source*, and that is what makes it dangerous: an exact vendor
+filename in the comment is what carries such a mistake through review intact.
+The useful annotation names the *subject* — "this is a property of the pack, and
+this model ships two". After the first form a reviewer nods; after the second
+they ask how you know which one is fitted.
+
+**Turn the assumption into an assertion.** Where a constant is unavoidable, also
+program the check behind it: read the identifier, compare, and refuse to apply
+the values when it disagrees. An assumption that can be checked cheaply at
+runtime should be, and its violation should fail loudly — silent degradation is
+the real cost of a wrong constant, not the wrong value itself.
+
+**Give "cannot tell" a defined behaviour.** These bugs come from framing the
+question as binary and leaving out the case where identification fails. Decide
+what happens then, explicitly and safely, or the unknown case lands silently on
+one of the branches.
+
+**Test the population, not the specimen.** Exercise the code against the *other*
+variant, not only the one in your hand; simulate it if the hardware is
+unavailable. A test that runs only on your unit validates your unit.
+
+☠️ **Precision is a proxy for confidence, not for correctness.** An exact
+filename, an exact number and an assured tone all raise a reviewer's trust
+without raising the truth of the claim. Weight it the other way: a constant that
+*looks* precise deserves more scrutiny about its scope, not less. "Where is it
+from?" always has a good answer. The question that finds the bug is "what is it a
+claim about, and can that vary?"
+
+Both sections above are the same rule seen twice: **a mechanism that verifies at
+the moment of use beats a decision frozen at authoring time** — whether the
+frozen decision is about an instrument or about the hardware.
+
 ## Acquiring ground truth locally — the core method
 
 ### Rule zero: a measurement is a comparison, so say what it was compared against
@@ -433,6 +551,80 @@ noticed, decide which quantity that is, and only then choose the instrument.
 Wall-clock throughput, processor time, memory bandwidth and latency are four
 different questions and a pipeline can be flat in one while it doubles in
 another.
+
+### Sample several times faster than the fastest thing you are willing to believe in
+
+☠️ **A sampling interval close to the period of what you are watching invents
+structure that is not there.** A one-minute sampler over a phone's idle current
+produced a clean "something happens every two minutes"; at five seconds the cycle
+did not exist — a flat floor with irregular peaks, and half a dozen daemons
+running at 5, 10, 20, 25 and 30 s beating against the sampler. Hours can go into
+explaining an artefact of the instrument. Before theorising about a period,
+re-measure at several times the resolution and check that the period survives.
+
+The same discipline applies to per-process accounting built by differencing
+`/proc/[0-9]*/stat` between snapshots. Two failure modes make the output absurd,
+and both are obvious *if* you sanity-check the total against `load average` and
+reject it when they disagree:
+
+- **a dropped previous snapshot turns every delta into a cumulative total** for
+  that sample, which reads as one process using several hundred percent of a
+  core. The tell is arithmetic: the suspect number divided by a plausible one
+  comes out as a small integer, identical for several processes.
+- **kworkers rename their `comm` per work item**, so any `pid|comm` key resets
+  between samples and the same PID appears twice with near-identical totals.
+  Exclude them, or key on PID alone.
+
+### Subtract a suspect rather than reasoning about it — but restore unconditionally
+
+To find what a running system is spending on, stop one component at a time and
+measure between each, **cumulatively** (never restoring between phases), so the
+phases form a descending staircase instead of N independent comparisons. What
+makes it safe to run unattended:
+
+- name the components that may **never** be stopped and keep them out of the
+  list — the transport you are connected over, its network manager and its bus;
+- a `trap` plus an unconditional restore at the end of the script; and
+- a **dead-man switch that does not depend on the script**:
+  `systemd-run --unit=deadman --on-active=45min` restarting everything, so a
+  crashed or interrupted run still leaves the device whole.
+
+Read a flat staircase as a real result. Ten daemons stopped with the floor
+unmoved is not a failed experiment: it excludes an entire class of explanation
+and points the next measurement at wakeups and interrupt counts rather than at
+CPU time.
+
+☠️ **Stopping a daemon can make the user interface lie in exactly the shape of
+the bug you are hunting.** Stopping the power daemon made a phone report 0 %
+battery — indistinguishable, on screen, from a fuel gauge that had collapsed, and
+alarming enough to prompt real-world action. The kernel's own log was continuous
+and physical throughout. When a displayed value goes wrong during an experiment,
+check the layer that *produces* it before believing the layer that *shows* it —
+and consider that you may have caused it.
+
+### Before writing a workaround, check whether the real path exists and is merely starved
+
+☠️ **A software substitute for an unreachable hardware precondition is worth less
+than making the precondition reachable, and it costs more.** The shape recurs: a
+correction the hardware offers never fires, so a driver-side equivalent gets
+written, and it works. Two questions are worth more than that patch.
+
+- **Is the hardware path missing, or just never satisfied?** Read the driver
+  before writing the substitute. Finding the register already read,
+  de-duplicated and consumed means there is no code to write at all — the gap is
+  in the operating conditions, and the patch is scaffolding around a mechanism
+  that already functions.
+- **Is the substitute's own precondition really more reachable?** Compare the two
+  gates numerically, and check when each is satisfied in normal use rather than
+  in the test that demonstrated it. A workaround that only fires under conditions
+  a user never produces has replaced an unreachable correction with a
+  rarely-reachable one, and left two mechanisms correcting the same quantity on
+  different schedules.
+
+When the answer is that it is scaffolding, **park it rather than merging it**:
+keep the patch, the measurement showing it works, and the condition that would
+bring it back. A branch is not the only place work can be kept safe, and code on
+a branch is read as a decision.
 
 ### A null result deserves an instrument a person can look at
 
@@ -1086,7 +1278,9 @@ carefully to work out whether your part is inside or outside it.
   a warning and a silent fallback, so a measurement taken under one can be attributing
   the result to the wrong renderer. Override per user with `environment.d` and
   `systemctl --user set-environment` rather than editing the distro's file, which is
-  package-owned and comes back on upgrade.
+  package-owned and comes back on upgrade — one instance of a general hazard, and
+  of the check that catches it, in `/fp3-kernel-test` ("a file you hand-placed
+  into a package-owned path is borrowed, not held").
 
 - **A truncated function pointer segfaults instead of failing.** `ctypes`
   defaults a foreign function's return type to `int`, so
