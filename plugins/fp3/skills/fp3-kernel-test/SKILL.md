@@ -216,7 +216,8 @@ cost a device, a boot, or a wrong conclusion at least once.
 16. ☠️ A zero-length DT boolean can hang uninterruptibly; an outer `timeout` does **not** break it.
 17. ☠️ `apk add linux-fp3` regenerates `extlinux.conf` and drops a hand-added fallback — rewrite it *after* the install.
 18. ☠️ A downstream ADSP-SSR on the UT oracle defaults to `restart_level=SYSTEM` — one crash reboots the phone; set `RELATED` first.
-19. ☠️ Force-pushing a rewritten branch orphans the package's pinned `_commit` — tag the old tip first, then check the tarball still 302s.
+19. ☠️ Never reboot with the PMIC's USB input suspended - the bit survives a warm reboot and wedged the bootloader into a fastboot that answers nothing; recovery needed a held power button.
+20. ☠️ Force-pushing a rewritten branch orphans the package's pinned `_commit` — tag the old tip first, then check the tarball still 302s.
 
 **Measurement integrity — protect the measurement:**
 
