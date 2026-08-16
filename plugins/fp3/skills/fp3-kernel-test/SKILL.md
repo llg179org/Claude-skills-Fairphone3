@@ -281,6 +281,8 @@ cost a device, a boot, or a wrong conclusion at least once.
 - A sound-server client run under `sudo` reaches no server — the test appears to run and measures nothing.
 - A DTB built from a topic branch can silently drop another layer's nodes; diff the decompiled DTB against the deployed one first.
 - `pmb build --src` applies `.gitignore` patterns but not their `!` negations, so a tracked file can be missing from the copy.
+- ☠️ **Never run a second `pmb` command while a build is in flight** — every package shares one chroot `/home/pmos/build`, so even a `pmb checksum` on an unrelated aport deletes the running build's tree out from under it. The compiler reports it as `fatal error: opening dependency file …: No such file or directory`, which reads like a source or disk fault and is neither. Serialise, and if a long build fails in a way that makes no sense, check what else you started while it ran.
+- ☠️ **Build a userspace patch on the host before packaging it.** The aport's compiler invocation is not yours: a `meson setup` + `ninja` on the host runs `-Werror -Wall -Wextra -Wshadow`, and caught a shadowed variable in a patch of ours that had already shipped because the device build does not use those flags. It costs minutes and it is a different question from "does the package build".
 - Before saying two systems disagree, check both are measuring — a hardcoded constant is not.
 - The oracle is a source of *configuration* too: read back the registers it programs.
 - A register field's width can be the design limit; work out what the hardware can encode.
