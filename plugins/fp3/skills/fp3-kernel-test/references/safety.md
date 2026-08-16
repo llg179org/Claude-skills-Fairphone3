@@ -983,3 +983,65 @@ The general form: **gate on the actuator, not on the controlled variable** -
 duty cycle rather than temperature, valve position rather than pressure, gain
 rather than brightness. If only the controlled variable is readable, the settle
 test is not a settle test and something else has to carry the weight.
+
+## The kernel command line is the one place an experiment cannot be undone
+
+Every other variable on this device can be put back over ssh: a module can be
+swapped and reloaded, a sysfs value rewritten, a unit disabled, a firmware file
+deleted. The kernel command line cannot. It lives on disk, it is read before
+anything you can talk to exists, and if the change hangs the boot it hangs it
+again on the next boot and every boot after that.
+
+That matters more here than on a machine with a screen, because **both remote
+channels need userspace to be running** — ssh over the USB gadget and ssh over
+WiFi are the same kind of channel, so they fail together, and a hang before the
+gadget comes up leaves no console, no fastboot and no shell. The watchdog does
+not save you either when the hang is earlier than its own probe: the only tell is
+that the phone never re-enumerates at all, which is indistinguishable from a
+phone somebody unplugged.
+
+The case: `fw_devlink=off`, added to `extlinux.conf` to test whether a
+`sync_state()` callback was turning off a rail. It was a fair hypothesis and a
+reasonable experiment; the mistake was staging it where it could not be reverted
+from the outside. The device needed a held power button and a human.
+
+So:
+
+- **Put the variable somewhere revertible.** A module parameter, a sysfs write,
+  a unit you can `systemctl disable`, a `.ko` you can swap back — all of these
+  are one ssh command from undone.
+- **If the command line really is the only place** (some things genuinely only
+  exist as `__setup()` parameters), arm the fallback entry *first* and confirm by
+  actually booting it once, before you rely on it. An untested fallback is a
+  guess about the bootloader's menu, not a recovery plan.
+- **Notice which class of change you are making before you make it.** "Can I undo
+  this over ssh?" takes a second to ask and is the whole difference between an
+  experiment and an outage.
+
+## An escape route you have not exercised is not an escape route
+
+The recovery plan written down for the boot-blocking case named a fallback that
+had never been run: *if the fallback entry does not boot, drop to fastboot and
+`fastboot boot` a known kernel*. When it was finally needed, `fastboot boot`
+turned out to fail on **every** image — including the bootloader payload that
+boots perfectly when flashed to the same slot. The plan had two rungs and the
+second one was imaginary, which is only discovered at the moment the first one
+is already gone.
+
+The generalisation is the one the verifier rules already make elsewhere: **a
+mechanism you have not yet seen work has not been shown to work, and a check you
+have not yet seen fail has not been shown to check anything.** A recovery path is
+a mechanism like any other. It gets no exemption for being the thing you are
+counting on — that is the reason to test it, not a reason to assume it.
+
+Two practical consequences:
+
+- **Exercise the escape hatch while the device is healthy**, when a failure costs
+  nothing and tells you the truth for free. Boot the fallback entry once. Run the
+  recovery command once against the real device.
+- **When an escape route does fail, read the error as one bit, not as a hint.**
+  A rejection message that is identical for a bad image and for a known-good one
+  carries no information about your image. Establish that by running the
+  known-good one through the same path before spending any time on the message —
+  otherwise you will iterate on the artefact to chase a message that was never
+  about the artefact.

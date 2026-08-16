@@ -198,8 +198,8 @@ cost a device, a boot, or a wrong conclusion at least once.
 
 **Brick-safety — protect the device:**
 
-1. One change per experiment; confirm `slot-retry-count` ≥ 1 before any fastboot flash/boot.
-2. A kernel experiment must never block boot — bounded wait, read-only dump, never a retry loop.
+1. One change per experiment; confirm `slot-retry-count` ≥ 1 before any fastboot flash/boot. ⚠️ It is a gate, not a verdict: a bootloader that rejects an image outright leaves the counter **untouched**, so an unchanged count means "never tried", not "tried and survived".
+2. Nothing you deploy may block boot, whatever form it takes — probe code, device tree, boot config, a unit: the phone has no console and both remote channels need userspace, so a hang costs a held power button. In code that means a bounded wait and a read-only dump, never a retry loop; for the other forms see 14, 16, 17 and 21.
 3. Never `sudo adb` (writes a root adbkey that locks you out); `sudo fastboot` is fine.
 4. Never read a clock-gated register — it hangs the bus or returns a uniform junk constant.
 5. Never read an unverified physical address from the AP; exfil via SMEM, not the carveout.
@@ -217,7 +217,9 @@ cost a device, a boot, or a wrong conclusion at least once.
 17. ☠️ `apk add linux-fp3` regenerates `extlinux.conf` and drops a hand-added fallback — rewrite it *after* the install.
 18. ☠️ A downstream ADSP-SSR on the UT oracle defaults to `restart_level=SYSTEM` — one crash reboots the phone; set `RELATED` first.
 19. ☠️ Never reboot with the PMIC's USB input suspended - the bit survives a warm reboot and wedged the bootloader into a fastboot that answers nothing; recovery needed a held power button.
-20. ☠️ Force-pushing a rewritten branch orphans the package's pinned `_commit` — tag the old tip first, then check the tarball still 302s.
+20. ☠️ Force-pushing a rewritten branch orphans the package's pinned `_commit` — tag the old tip first, then check the tarball still resolves with `curl -sL` and reads **200**. Without `-L` every hash answers 302, a bogus one included, so the check passes unconditionally; run it against a bogus hash too.
+21. ☠️ Never stage an experiment in the kernel command line here — it is on disk, so it repeats on every boot, and both remote channels need userspace; a hang leaves nothing but a held power button. Put the variable in a module parameter, a sysfs write or a unit you can undo over ssh.
+22. ☠️ An escape route you have not exercised is not an escape route — boot the fallback entry once and run the recovery command once *while the device is healthy*; and when one does fail, first put a known-good artefact through the same path, or you will iterate on your image to chase a message that was never about it.
 
 **Measurement integrity — protect the measurement:**
 
