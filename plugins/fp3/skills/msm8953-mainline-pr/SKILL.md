@@ -72,6 +72,33 @@ per thing you learned, DTS and driver interleaved). Upstream wants them ordered 
 *logic* (few commits, each one self-contained, DTS and driver never in the same
 commit). This skill is the translation.
 
+## A rule that lives only behind a link does not fire
+
+Worked example, 2026-08-18, on a live request: this skill listed
+`submitting-patches.rst` as "mandatory reading before v1" and distilled its
+trailer, mood and wrap rules — but not its "Backtraces in commit messages"
+section. Asked to polish a commit message carrying a pasted oops, the model
+applied everything the skill *states* and kept the dmesg timestamps, which that
+section explicitly names as distracting noise to trim. The link was right there;
+it did not fire. At execution time an agent applies what the skill says, not
+what its reading list says — a rule delegated to a reference silently degrades
+into no rule.
+
+Two duties follow, one for the writer and one for the runner:
+
+- **Writer's duty — distill on discovery.** When a session finds an operative
+  rule in a linked document that this skill does not state, add its distilled
+  form here *in the same session*, next to the action it governs, keeping the
+  link as the source. A lesson left only in the log or in the linked doc will be
+  missed again; that is what "Feeding the method back" exists for.
+- **Runner's duty — fetch before answering a form question.** Before drafting or
+  reviewing any artefact whose form a linked document governs — a commit
+  message, a cover letter, a binding, a series structure — check whether this
+  skill states the rules for *that specific part*. If it does not, fetch and
+  read the governing section first; never fill the gap from memory or general
+  habit, because generic habit is exactly what these documents exist to
+  override.
+
 > **Read this first — the destination changed.** An earlier revision of this skill
 > recommended a **pull request to msm8953-mainline as the easy first target** and
 > stated that it had "no AI ban". **That is wrong and has been corrected below.**
@@ -1234,6 +1261,17 @@ GitHub-flow conveniences any more.
   **imperative mood** ("add", not "added"), body wrapped at **~75 columns**. Add a
   `Fixes: <12-char-sha> ("subject")` tag when fixing a known commit, and `Cc:
   stable@vger.kernel.org` for a user-visible bugfix (e.g. the TX front-end hold).
+- **A pasted oops/trace is trimmed, not transplanted.** `submitting-patches.rst`
+  §"Backtraces in commit messages": distill the dump — drop timestamps, module
+  lists, register and stack dumps, and the generic entry/syscall tail
+  (`el0_svc…`, `invoke_syscall…`, `el0t_64_sync…`); keep the frames that tell
+  the story. And keep the oops *header*: the lines above `Call trace:`
+  (`Internal error:` / `BUG:` / the `pc :` line) say *what* happened — a trace
+  without them shows only *where*, and if the failure was a hang rather than an
+  oops, the message must say so in prose instead. Measured 2026-08-18: recent
+  qcom-dts commits in mainline that carry a trace all trimmed the timestamps;
+  the timestamped counter-examples in the tree are scattered exceptions, not
+  the pattern.
 - **DT is checked, not just compiled.** For device-tree work run the DT checks —
   `make dtbs_check` (and `make dt_binding_check` if you touch a binding). A commit
   that introduces DT warnings can be **reverted** (`maintainer-soc-clean-dts.rst`),
@@ -1425,6 +1463,14 @@ work — so a self-review that stops at "sparse is clean" is half done.
 - [ ] **`Fixes:` taken from `git blame` on the real tree**, not from the file's age.
 - [ ] Commits are `-s` signed, imperative-mood, body wrapped ~75 cols; `Fixes:`/`Cc:
       stable` on bugfixes.
+- [ ] **Any oops/trace in a commit message is trimmed** per
+      `submitting-patches.rst` §Backtraces — no timestamps, module lists,
+      register/stack dumps or generic syscall tail — and the oops *header* (the
+      lines above `Call trace:`) is kept.
+- [ ] **Every form question was answered from a stated rule, not from habit**: if
+      a linked doc governs a part this skill does not distill, that section was
+      fetched and read — and its rule added here (see "A rule that lives only
+      behind a link does not fire").
 - [ ] Human `Signed-off-by` on **every** commit — audit for the empty-trailer
       commits; **no `Signed-off-by` from the AI**; `Co-authored-by:` swapped to
       `Assisted-by:` naming the model that actually did the work.
