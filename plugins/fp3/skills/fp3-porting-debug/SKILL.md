@@ -70,6 +70,22 @@ Two questions decide it when writing something down:
 
 Neither, and it is only "what we did on Tuesday" → archive.
 
+☠️ **A "resume point" / "what do I do now" file silently becomes a second dated
+log, and then the two logs diverge.** Measured on a power runbook: it started as
+a plan and accreted ~2 000 lines of dated measurement entries, a zero-overlap
+twin of the real findings log. The mechanism is ordinary and will recur — the
+session that takes the measurement writes the result **where it read the plan**,
+because that file is already open.
+
+**Rule: a resume-point file may contain POINTERS ONLY** — state → the status
+page, plan → the open-items page, measurement → the findings log. The moment the
+first dated measurement section lands in it, it has started down the second-log
+path, and two logs disagreeing is the same failure as a branch diverging from its
+integration branch. Splitting it back out was cheap (the two questions above
+decided it line by line); **finding the duplication was the expensive part**, so
+the check to run periodically is a section-title diff between the runbook and the
+findings log.
+
 The visible consequence: **this skill carries no status section for any
 subsystem.** Whether audio, the camera or the charger works today, and what its
 code is, is in
@@ -506,6 +522,27 @@ instinct is the reverse, and it is wrong. For anything unattended, add a second,
 independent bound — a wall-clock limit sized to the risk — because a single
 guard that turns out to be blind is indistinguishable from no guard at all.
 
+**Two ledgers, and they answer different questions.** The session ledger holds
+what *you* learned today. The repository's **retraction tables** — the "we
+believed X, X is false" rows that accumulate in a project's bring-up READMEs —
+hold what the project learned before you, and they exist because those facts were
+expensive. ☠️ **Consult them before building an instrument**, not after:
+`grep -rn "<the attribute>" docs/*/bringup/README.md` costs nothing and can
+delete a day's work before it starts.
+
+☠️ **But a ledger is an instrument too, and it can be wrong.** One was checked,
+believed, refuted by the next sample, and then vindicated on a different axis —
+three positions on one fact inside an hour. What settled it was not more reading;
+it was **two instruments disagreeing by 37 %**, which was the only step in the
+sequence that could not be argued with. So:
+
+- **A ledger row that agrees with your first sample is a hypothesis that has just
+  become worth testing properly**, not a confirmation. A first-sample agreement
+  is the most dangerous kind, because it removes the reason to keep looking — and
+  so is the first *dis*agreement, for exactly the same reason.
+- **Where a new instrument is proposed, run the old one beside it.** The
+  disagreement, not the number, is the result.
+
 ## Is that number a decision, a construction, or an observation?
 
 Every value in the system is one of three things, and the difference is invisible
@@ -652,6 +689,44 @@ alarming enough to prompt real-world action. The kernel's own log was continuous
 and physical throughout. When a displayed value goes wrong during an experiment,
 check the layer that *produces* it before believing the layer that *shows* it —
 and consider that you may have caused it.
+
+☠️ **A `trap` does not protect against something killing the unit from outside,
+and the restore you skip verifying is the one that fails.** Every measurement
+script here carries `trap restore EXIT INT TERM`, and it held all night — normal
+exits, `RuntimeMaxSec` expiry, ssh timeouts. Then one running transient unit was
+stopped by hand (`systemctl stop <unit>`) to launch its successor, and the modem
+manager stayed down for the next thirty-five minutes. `systemctl stop` terminates
+the unit's whole cgroup: the shell gets SIGTERM, the trap starts, and
+`KillMode`/`TimeoutStopSec` can take the process down before `restore()` finishes
+its `systemctl start` loop — which itself needs to talk to the same systemd.
+
+Two rules, the second cheap enough to be unconditional:
+
+1. To swap one measurement for another, let the first **finish**, or give it a
+   deliberate stop path. Do not `systemctl stop` a unit whose restore matters.
+2. **After any manual stop, verify the restore by reading state, not by trusting
+   the trap** — one line naming the services, the charger, and whatever the
+   script cut.
+
+☠️ **And a restore that "starts the service" is not a restore if starting the
+service is not what brings the thing back.** Some services own hardware they do
+not re-acquire on start: stopping the remote-filesystem daemon powers a
+co-processor down, and starting it again does *not* bring the co-processor back —
+that needs an explicit `remoteproc` start, and a dependent daemon may stay broken
+until reboot. A `restore()` that loops `systemctl start` over its cut list will
+report success and leave the device in the cut state, which turns the *next* leg
+of an A-B-A into a second treatment leg wearing the control's name. Restore, then
+**verify the thing itself**, not the service that was supposed to provide it.
+
+☠️ **A wait loop needs a case for "the thing I am waiting for no longer
+exists."** Without it, it does not fail — it polls forever. Four orphaned
+host-side loops were found ssh-ing a phone every 20–30 s to ask about units that
+had already completed, because `systemctl is-active` on a `--collect`ed unit
+returns non-zero and the loops read that as "not ready yet". That polling is not
+free: on a power measurement the observer's own logins were later measured as a
+real load, in the shape of a monotonic trend that read exactly like the effect
+under test. **After starting a measurement, the next touch is the end of the
+measurement.**
 
 ### Before writing a workaround, check whether the real path exists and is merely starved
 
@@ -805,6 +880,33 @@ your remaining hypotheses in half.
    proved `func1` UNCLAIMED — the real fix; and the DAPM `On` set showed the headphone
    ran through the interpolator SECONDARY/MIX branch, so `RX1/RX2 Mix Digital Volume` was
    the working loudness control while the main-path `RX Digital Volume` did nothing.)
+
+   ☠️☠️ **But `pinmux-pins` is only ground truth in ONE direction — it proves a pad was
+   never claimed, never that the pad is still yours.** The pinctrl framework's "current
+   state" is **bookkeeping, not hardware**: it records what Linux last asked for. A
+   co-processor (ADSP, modem, TZ) can rewrite TLMM behind its back at any time, and
+   `pinmux-pins` will go on reporting the pin as claimed, in the right function, forever.
+   Measured here: firmware on the audio DSP reset an i2c pin pair to power-on defaults
+   once, about 8 s after the modem came up; the amplifier on that bus then looked exactly
+   like a dead chip. **The register-reading instruments are the truth** —
+   `/sys/kernel/debug/gpio`, or `/dev/mem`. This is the same class as a regmap cache with
+   no `volatile_reg`: **two instruments that read through one layer are one instrument.**
+
+   Three corollaries from that hunt, all transferable:
+
+   - **"Every address NAKs, including one that does not exist" acquits the CONTROLLER, not
+     the pads.** A bus pad that has been muxed away produces precisely the dead-chip
+     signature, so that test cannot distinguish the two.
+   - **Invariant timing anchored to boot is not necessarily a kernel timer.** Here it was a
+     co-processor init chain — modem-up plus a fixed delta. The decisive experiment was
+     restarting each remoteproc while watching the pads: modem → nothing, audio DSP →
+     trampled ~1.7 s later.
+   - **When the downstream oracle "just works", ask what it re-applies.** Its i2c driver
+     re-applied the active pinctrl state on *every transfer*, which is why the hardware
+     looked fine there; the mainline driver applies it once, leaving the device tree's
+     sleep state as dead configuration. ☠️ The fix has to *alternate* states — the pinctrl
+     core no-ops a request for the state already recorded, which is the same bookkeeping
+     trap arriving a second time.
 
    **When a path is fully powered yet produces exact zeros, look for two board-level fault
    classes before suspecting the far side.** Exact zeros — not noise, not garbage — mean a
@@ -1422,6 +1524,31 @@ cost a build cycle before it was written down.
   needs a different configuration, the safe shape is the one Megapixels uses for
   its preview and capture modes: stop, reconfigure, restart, act, and put it
   back. Slower and visible, but it works, and it fails in a way you can see.
+
+- **☠️ An asymmetric acquire/release pair plus a swallowed message class is a
+  permanent resource leak on the far side, and nothing local looks wrong.** A bus
+  controller acquired a channel through its own vendor-specific message — which
+  really did activate the resource on the co-processor — while the *generic*
+  release path was silently dropped by the same driver (`return 0` over a whole
+  message-code range). Teardown was therefore a no-op and the co-processor-side
+  vote stayed held forever. Everything on the caller's side was balanced, which
+  is why it read as correct.
+
+  Three transferable moves, and they apply to any bus or co-processor:
+
+  1. **If a resource is acquired by a driver-specific path, check that the
+     RELEASE travels a path that actually reaches the wire.** "Balanced teardown
+     in the caller" proves nothing when the layer underneath swallows it.
+  2. **A protocol constant that is defined and referenced nowhere, next to an
+     asymmetric enable/disable pair, is a strong smell** — the missing half's
+     recipe is usually sitting in the downstream/vendor source.
+  3. The bisect turned on asking **"which HALF"**, not "which line": three cheap
+     single-boot preventive tests — session without data, codec route without a
+     stream, real stream — narrowed it to the combination.
+
+- **☠️ Before building a series, search the upstream patch tracker for the FILE
+  name.** One fix here had been posted upstream by the vendor eleven days
+  earlier; the correct move was a `Tested-by:` reply, not a competing patch.
 
 ## Observing a co-processor that has no obvious debug port
 

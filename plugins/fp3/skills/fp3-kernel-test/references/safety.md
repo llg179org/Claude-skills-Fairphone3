@@ -1045,3 +1045,53 @@ Two practical consequences:
   known-good one through the same path before spending any time on the message —
   otherwise you will iterate on the artefact to chase a message that was never
   about the artefact.
+
+## A leg that contains a transient must state its offset from that transient
+
+"Settle before measuring" is the rule above. This is the sharper form that a
+reboot-matched A/B needs, and it was measured by getting it wrong.
+
+Two kernels were compared by battery-voltage slope. The **control** leg — the
+same kernel against itself, so the true answer was zero — read **−142, +141,
++156 or +25 mV/h** depending on one thing only: how much of the head was
+discarded (0 / 150 / 300 / 600 s). Nothing else changed. The post-boot voltage
+recovery is far larger than the effect being looked for, so a leg that starts a
+different distance from its own boot is measuring the transient and calling it
+the treatment.
+
+**The rule:** when a leg contains a transient — a boot, a resume, a service
+restart, a thermal excursion — the **offset from that transient is part of the
+protocol**, identical on both sides, and it is quoted with the number. "Reboot,
+settle a fixed 600 s, then log a fixed window" is a protocol; "reboot and
+measure" is not.
+
+☠️ And the diagnostic that reveals it costs nothing: **fit the control leg at
+several head offsets.** If the answer moves, the offset is doing the work. A
+control leg that has only been fitted one way has not been checked.
+
+## Measurement data written to the device's own `/tmp` does not survive the A/B that needed it
+
+The safety index already says measurement data does not live in the session
+scratchpad. The same rule applies one level down, on the phone, and it is easier
+to miss because the path looks durable.
+
+A 26-minute discharge log was written to `/tmp` on the device. The A/B's second
+leg required a reboot. pmOS's `/tmp` is **tmpfs** — the leg was gone, and all
+that survived was a summary line that had been printed to the terminal earlier.
+
+**Write device-side captures to `/home/<user>/` or another real filesystem, and
+copy them off the device before any reboot.** The copy is the step that actually
+protects it: a file on a rootfs that a watchdog reset can leave `emergency_ro` is
+only slightly better off than one on tmpfs.
+
+## Counters that survive a warm reboot sometimes, and reset other times, can only be differenced within one boot
+
+The RPM master-stats counters were compared across a warm reboot and produced a
+plausible, wrong answer. They **sometimes** persist across an application-
+processor warm reboot — the co-processors never went down — and sometimes reset.
+Both behaviours were observed on the same device.
+
+**Never compare such a counter across boots; take deltas within one boot only.**
+The general form: before differencing any counter, establish what resets it —
+and "it looked continuous last time" is not that. A counter whose reset condition
+you have not established is not an instrument, it is a number.
