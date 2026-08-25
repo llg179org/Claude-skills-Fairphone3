@@ -99,6 +99,39 @@ Two smells worth checking for directly, because both read as helpful:
 - a **literal hash, branch tip, or "here are the N offending commits" list** —
   the finding is method, the instances are status.
 
+### ☠️ A heading goes stale independently of its body, and it is read first
+
+The rule above is about *where* a fact lives. This one is about *what part of a
+document is load-bearing*, and it was measured on 2026-08-25 by finding the same
+defect five times in one file.
+
+A "read this first after a long gap" paragraph had named the running kernel
+revision. It had been corrected four times — `r61`, `r65`, `r70`, `r73` — each
+time by writing in the new number, and each correction created the next stale
+version. The fix that finally held was to **delete the fact from the heading and
+name the command instead**: read the revision off the device.
+
+Three sections in the same file carried headings that said `CLOSED`, `FIXED` and
+`RECOVERED` while their bodies each described work that was still open. That is
+worse than a stale number, because a reader who is skimming *stops at the
+heading* — the strikethrough is a promise that the body need not be read.
+
+Two rules, and the second is the one that transfers:
+
+1. **A closed heading over an open body is a lie with a checkmark on it.** When
+   an item is partly done, retitle it by **what is still open**, and move the
+   finished part out. "An incoming call cannot wake the phone — FIXED" became
+   "The modem edge is not armed at boot, so automatic sleep must stay off": same
+   facts, and the heading now names the thing a reader must act on.
+2. **Do not put a value in a heading you are not prepared to re-check every time
+   you edit the file.** Revisions, counts, percentages and dates in headings all
+   rot on their own schedule, out of sight of the body that justified them.
+
+A cheap audit that finds all of it:
+`grep -n '^#.*~~\|^#.*CLOSED\|^#.*FIXED\|^#.*✅' <file>` — every hit is a
+heading claiming to be settled, and each one needs its body read to confirm it
+still is.
+
 ## Working unattended — what actually stops, and what does not
 
 "Unattended access" elsewhere in these skills means *no human at the phone*. This is
@@ -175,8 +208,26 @@ it works) and
 - `references/archive/ut-framer-boot-sequence.md` — the 2026-07-23 UT boot-ordering capture (the working framer path).
 - `references/archive/report-attachments/` — polished write-ups and raw dumps (firmware strings/disasm, PIL-vs-PAS, golden IPC traces, devmem dumps, outreach drafts). Local only; not in the published repo.
 
-**Method references (the *how*, split out of this SKILL for size):**
-`references/{safety,firmware-re,recovery,devmem-oracle-kernel}.md`.
+**Method references (the *how*, split out of this SKILL for size).** ☠️ Three of
+these live in the **sibling** skill, not here — this line named them as
+`references/{safety,firmware-re,recovery,devmem-oracle-kernel}.md` until
+2026-08-25, and three of the four paths did not resolve:
+
+- `references/devmem-oracle-kernel.md` — here.
+- [`../fp3-kernel-test/references/recovery.md`](../fp3-kernel-test/references/recovery.md)
+  — **the one to open when the phone will not boot.** The A/B slot-swap route,
+  the `losetup -fP` nested-MBR trick, the silent `rc=1` on the wrong node.
+- [`../fp3-kernel-test/references/safety.md`](../fp3-kernel-test/references/safety.md)
+  — the brick-safety gates, and "an escape route you have not exercised is not
+  an escape route".
+- [`../fp3-kernel-test/references/firmware-re.md`](../fp3-kernel-test/references/firmware-re.md).
+
+☠️ **A broken path in a skill fails in the worst possible way**: it fails at the
+moment the file is actually needed, which for `recovery.md` is a phone that will
+not boot. It is the same class as "a rule that lives only behind a link does not
+fire", one step worse — the link did not even resolve. When a skill names a
+bundled file, the cheap check is `ls` on the path it just wrote, and it costs
+nothing next to being wrong here.
 
 **Tooling + source, also bundled:**
 - `scripts/` — the reusable FP3 tooling, one line per script in `scripts/INDEX.md` (read that
@@ -635,6 +686,26 @@ build the thing that shows the phenomenon to a human, side by side with the same
 number the script computes — then the operator's eye and the metric are checking
 each other, and a disagreement between them localises the fault to the
 instrument.
+
+☠️ **And two instruments agreeing on nothing is not evidence of nothing.** The
+mirror of "two instruments that disagree is worth more than either reading
+alone", and it is the more dangerous half, because agreement feels like
+confirmation. Measured 2026-08-25: a test asked whether an incoming call raises
+a suspended phone. Both instruments chosen in advance came back empty — one
+counter read `+0` everywhere, one query answered "none found" — and the call had
+worked perfectly. The counter does not observe this class of event at all (it
+advances only on an explicit userspace-visible wakeup call, and the path in
+question does not use one); the query ran one second before the object it was
+looking for existed. Neither was measuring the thing, and their agreement
+measured nothing twice.
+
+Only knowing independently *when the call was placed* prevented it being written
+up as a clean negative. So: **before a null result is believed, each instrument
+has to be shown positive on a case known to be true** — separately, not as a
+set. And when a null is reported, say which instruments produced it, so the next
+reader can ask what each of them can actually see. A timeline the run did not
+choose in advance — here, the system journal — is often the thing that settles
+it, which is an argument for capturing more than the instruments you designed.
 
 This is not a fallback for when the script fails; it is worth building before
 believing a null. `scripts/focus-view.py` is the pattern: a viewfinder that owns
