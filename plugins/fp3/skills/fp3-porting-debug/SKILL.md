@@ -615,6 +615,45 @@ and a tree diffed as a list invents differences that are just nesting.
 first look at a question nobody has answered before.** That is when to go back
 and read the header, not when the numbers look strange.
 
+### ☠️☠️ A ranking instrument is blind to the rare event, and the rare event is usually the cause
+
+The single most expensive blind spot of a long night, and it is structural rather
+than careless.
+
+The question was *what ends this suspend early?* The instrument was a
+`/proc/interrupts` diff across the suspend, sorted by delta. Hours went into
+reading the top of that list — which line moved most, which rate changed between
+arms, which one appeared in one condition and not another.
+
+**The answer was the line with the fewest counts in the whole table.** It fires
+**once** per suspend, because ending the suspend is all it does. It sat far below
+every truncation, and it would have been invisible even in an untruncated list
+sorted by magnitude, because *nothing about its magnitude is remarkable*.
+
+The general shape: **an event that happens once and changes everything cannot be
+found by an instrument that ranks by how often things happen.** Wakeups,
+oopses, first errors, the transition that latches a state — all of this class.
+Sorting by frequency actively buries them, and the more diligent the sorting, the
+deeper.
+
+So, when the question is *what caused this transition*:
+
+- **Prefer an instrument that names the cause over one that counts activity.**
+  On Linux PM that is `/sys/power/pm_wakeup_irq`; elsewhere it is the first error
+  in a log, the latching write, the one-shot IRQ. Counting is for
+  characterising a steady state, not for finding a trigger.
+- ☠️ **If the naming instrument returns nothing, find out whether it EXISTS
+  before concluding anything from its silence.** Here it read as an empty file
+  for two days, and was written up as "this counter does not attribute s2idle
+  wakes". It was not compiled in — one Kconfig symbol — and enabling it answered
+  the question in a single suspend after two nights of indirect measurement.
+  **An absent file and a file saying "nothing" are the same bytes and opposite
+  facts.** Check the config, or check that the path exists at all, before a null
+  from it is allowed to mean anything.
+- **Rank by causal candidacy, not by count.** "Which lines fired at all during a
+  window when almost nothing should fire" is a better sort than "which fired
+  most".
+
 **The sibling rule: never conclude "absent" from a truncated or ranked list.**
 The fourth instance in the same session was a tool that piped its own output
 through `head -8`. A line showed up in two arms of an experiment and not in the
