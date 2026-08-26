@@ -585,6 +585,36 @@ record the conditions it was taken under** — the state of every service it cut
 the revision, the cable, the uptime, the registration state. It costs a line. The
 question that makes it decisive is usually not yet asked.
 
+### ☠️ Read the header before indexing by position
+
+Three times in one session a **correct command** produced a **confident wrong
+answer**, and every one was the same mistake wearing different clothes:
+
+* a regulator dump read as a flat list when it is a **tree** — the indented rows
+  are child regulators, not only consumers, so two rails looked "on for us, off
+  for the oracle" when both were held by a child. Published as a lead, dead
+  within hours.
+* `grep -r --include='sub/dir/*.md'` — `--include` matches **basenames, not
+  paths**, so the search silently covered a fraction of what it appeared to and
+  reported seven things absent that were present.
+* `awk '$9 > 0'` on a debugfs table whose interesting field is **$10** — the
+  neighbouring column was a millisecond timestamp, nonzero for every row that had
+  ever been touched, so a settled exclusion appeared to collapse.
+
+None of these fails loudly. Each returns a plausible, well-formed, wrong result,
+and the wrongness is invisible in the output — which is why "the command ran
+fine" is not evidence about a positional read.
+
+**The rule is one line: before indexing a field by number, print the header.**
+`head -1` on the file, or the tool's own labelled row. It costs nothing next to
+the retraction. And the same applies to *shape*: before diffing two dumps, decide
+whether the thing is a list, a table or a **tree** — the diff will not tell you,
+and a tree diffed as a list invents differences that are just nesting.
+
+☠️ The tell that should trigger the check: **a result that arrives cleanly on the
+first look at a question nobody has answered before.** That is when to go back
+and read the header, not when the numbers look strange.
+
 ### ☠️ n in one direction is not a law — try to break it before you publish it
 
 Five consecutive measurements from two different instruments agreed. It was
