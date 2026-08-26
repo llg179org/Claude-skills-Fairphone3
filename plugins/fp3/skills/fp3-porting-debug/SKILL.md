@@ -615,6 +615,27 @@ and a tree diffed as a list invents differences that are just nesting.
 first look at a question nobody has answered before.** That is when to go back
 and read the header, not when the numbers look strange.
 
+**The sibling rule: never conclude "absent" from a truncated or ranked list.**
+The fourth instance in the same session was a tool that piped its own output
+through `head -8`. A line showed up in two arms of an experiment and not in the
+other two, and was written up as the finding — but the eighth line of the arms
+where it was "missing" was *three counts higher* than the value in question, so
+it would have ranked ninth and been cut. The absence was the pipe, not the phone.
+
+So: **a claim that something is NOT there requires output that is complete by
+construction.** Presence can be read off a top-N list; absence cannot, ever. If a
+tool ranks or truncates — `head`, `tail`, `sort | head`, a "top offenders"
+section, a log with a line limit — either remove the limit before drawing the
+conclusion or state the claim as "not in the top N", which is usually not worth
+stating.
+
+☠️ And there was a second tell in that same data, visible and ignored: the count
+was **exactly the same in a 4-second window and a 32-second one**. A fixed number
+where a rate is expected means the thing is a per-transition cost, not a driver of
+the phenomenon — and noticing that would have killed the lead before the truncation
+argument was even needed. **When a count does not scale with the window, it is not
+measuring what the window measures.**
+
 ### ☠️ n in one direction is not a law — try to break it before you publish it
 
 Five consecutive measurements from two different instruments agreed. It was
