@@ -543,6 +543,65 @@ sequence that could not be argued with. So:
 - **Where a new instrument is proposed, run the old one beside it.** The
   disagreement, not the number, is the result.
 
+### ☠️ A rule stated in prose is a wish; a rule in a script is a rule
+
+The hardest-earned entry here, because every excuse for it had already been
+removed. This project records its retractions carefully. One of them named a
+mechanism, retracted four measurements on the strength of it, and wrote the fix
+out in bold with the exact command to run. **Five days later the same failure
+destroyed the control leg of an overnight run**, because the rule was never put
+into the tool that needed it.
+
+It was not behind a link. It was not in a skill. It was in the project's own
+findings log, in the file the person had written themselves. It still did not
+fire — because **a findings log is read when you are looking for a finding, and
+nobody is looking for a finding at the moment they schedule a run.**
+
+So: **a retraction is not finished when it is written down. It is finished when
+the gate exists.** Where a measurement has a validity precondition — a service
+that must still be running, a state that must still hold, a device that must
+still enumerate — that precondition belongs in the tool, as a check that
+
+  * runs at the point where it can still change the outcome,
+  * is **allowed to fail**, and
+  * says in its own output what is invalid if it did.
+
+A tool that swallows the outcome of its own restore (`2>/dev/null`, no readback)
+cannot distinguish "restored" from "did not happen", and neither can anyone
+reading its log afterwards.
+
+### ☠️ Print the state beside every result, before anyone asks what it is for
+
+The same run that lost its control leg had recorded the evidence of the loss all
+along. Each arm printed how long it actually slept against how long it asked —
+put there for an unrelated reason. When an independent measurement days later
+established what that number should look like in each state, the contamination
+became **readable in the raw capture**, with no re-run, no new instrument and no
+cleverness. Only a reason to look at the column, which did not exist when the
+capture was taken.
+
+Generalise it: **the cheapest thing a measurement can do for its future self is
+record the conditions it was taken under** — the state of every service it cut,
+the revision, the cable, the uptime, the registration state. It costs a line. The
+question that makes it decisive is usually not yet asked.
+
+### ☠️ n in one direction is not a law — try to break it before you publish it
+
+Five consecutive measurements from two different instruments agreed. It was
+written up as a categorical statement about the device. **One hour later a third
+instrument produced the opposite result** under conditions nobody had varied on
+purpose, and the statement had to be withdrawn from three documents.
+
+This is the first-sample-confirmation trap above, one level up: it applies to a
+*pattern* exactly as it applies to a *sample*, and agreement across instruments
+does not protect against it when none of them was aimed at breaking the claim.
+
+**Before an observation becomes a law, run one round whose purpose is to falsify
+it** — vary the thing you did not vary, and say what you varied. And when the
+data says "sometimes", the next measurement is a **rate**, not another story: n
+repetitions of one condition, with the candidate variables recorded per round, so
+that "sometimes" acquires a number instead of a narrative.
+
 ## Is that number a decision, a construction, or an observation?
 
 Every value in the system is one of three things, and the difference is invisible
