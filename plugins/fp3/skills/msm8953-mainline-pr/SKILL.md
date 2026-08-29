@@ -438,7 +438,9 @@ polled mode"*, and *"DON'T refer to Linux or 'device driver' in bindings.
 Bindings should be based on what the hardware has, not what an OS and driver
 currently support."* Real hardware that Linux cannot yet drive is still real
 hardware. ☠️ Do not "clean up" a correct description because nothing consumes it
-yet — that is deleting a fact.
+yet — that is deleting a fact. Dmitry Baryshkov, reviewing a qcom DTS in 2026-04
+and asked why a property should be there if the driver ignores it: *"DT describes
+the hardware. The driver behaviour is not that relevant here."*
 
 **Where the two meet is `status`.** `dts-coding-style.rst` gives `status` exactly
 this job: *"Status is the last information to annotate that device node is or is
@@ -756,7 +758,14 @@ a few hours' work, and it takes the series from "nearly clean" to clean. Worked
   (which compiles and checks every example), `yamllint -c
   Documentation/devicetree/bindings/.yamllint`, and `CHECK_DTBS=y` against the
   real board DTB — the last is the only one that proves the schema matches the
-  node you actually ship. The mechanics, the differential discipline and the
+  node you actually ship. ☠️ **Upgrade the tooling first** (`pip3 install dtschema
+  --upgrade`): Rob Herring's bot replies *"My bot found errors running 'make
+  dt_binding_check' on your patch"* with the failing lines, and a stale dtschema
+  is how a patch passes locally and fails there. What that bot most often catches
+  in a first binding: the `$id` not matching the file's actual path and name, a
+  node name in the example that does not match the schema's name pattern, a
+  `required:` property missing from the example, and a plain syntax error in the
+  example DTS — all four are found by running it yourself. The mechanics, the differential discipline and the
   silent-skip trap are in
   [`../fp3-kernel-test/references/safety.md`](../fp3-kernel-test/references/safety.md).
 - **Where a binding patch goes in the series:** its own commit, before the driver
@@ -812,6 +821,12 @@ form. None of these are judgement calls; each cost somebody a round trip.
 - **Generic node names.** `fuel-gauge@55`, `nfc@8`, `touchscreen@…` — the class of
   device, per the DT spec, never the part number (`bq27541-battery@55`). The part
   number is what `compatible` is for.
+- **Nodes go in address order, not at the end of the file.** A new `spi@78b7000`
+  belongs after `i2c@75b9000`, and inside a node the property order is the one
+  `dts-coding-style.rst` fixes, with `status` last before the child nodes.
+- **`reg` covers the whole block the hardware occupies**, not the bytes the driver
+  happens to touch: *"Please mark it as the entire 0x100000 that it occupies, no
+  matter if there's anything in there"*.
 - **One addition to the shared DTSI beats three identical additions to board DTS
   files** when every board that includes it has the part. A hypothetical future
   board that might not is not an argument.
@@ -1480,8 +1495,21 @@ site is **plain HTTP with no TLS**; a fetcher that upgrades to `https://` gets
   patch failed on exactly that).
 - ☠️ **The merge window is not review time.** Patches sent while it is open wait
   until it closes; sending them then and asking, hours after it reopens, why 117
-  patches have not been applied is precisely part 6. Give weeks, not days; ping
-  at most once, on-list, in-thread.
+  patches have not been applied is precisely part 6. Give weeks, not days.
+- ☠️ **Do not ping — resend.** Mark Brown, 2026-06-10, to a "Gentle ping on that
+  fix": *"Please don't send content free pings and please allow a reasonable time
+  for review. People get busy, go on holiday, attend conferences and so on so
+  unless there is some reason for urgency (like critical bug fixes) please allow
+  at least a couple of weeks for review. If there have been review comments then
+  people may be waiting for those to be addressed. Sending content free pings adds
+  to the mail volume (if they are seen at all) which is often the problem and since
+  they can't be reviewed directly if something has gone wrong you'll have to resend
+  the patches anyway, so sending again is generally a better approach though there
+  are some other maintainers who like them - if in doubt look at how patches for
+  the subsystem are normally handled."*
+  (<https://lore.kernel.org/all/aimBR9VyYnK8CpBD@sirena.co.uk/>) Two weeks is the
+  number; a resend is the move; and the last clause is a method in itself — when a
+  subsystem's habit is unknown, read its list before assuming this one.
 
 **Answering a review.**
 
@@ -1702,6 +1730,50 @@ tell you to expect:
   the hardware". And nothing sleeps in an IRQ handler: `usleep_range()` reachable
   from a hardirq means the work belongs in a threaded handler.
 
+**Subsystem idioms a reviewer will not let pass.** Each of our categories has a
+house convention that no compiler or checkpatch enforces, and that a series
+touching that subsystem is expected to already know. Read the subsystem's own
+document before writing, not after the comment arrives:
+
+- **power-supply (charger, fuel gauge).** The class has fixed units, and
+  `power_supply_class.rst` states them: *"All voltages, currents, charges,
+  energies, time and temperatures in µV, µA, µAh, µWh, seconds and tenths of
+  degree Celsius unless otherwise stated. It's driver's job to convert its raw
+  values to units in which this class operates."* A driver that reports mV
+  because the register holds mV is wrong, however consistent it looks with the
+  datasheet — and this is the one place where a raw hardware number must **not**
+  reach the interface unconverted.
+- **Runtime PM (camera AF rail, codec, anything with a `pm_runtime_get`).** Use
+  `pm_runtime_resume_and_get()`, not `pm_runtime_get_sync()`:
+  `runtime_pm.rst` says get_sync *"does not drop the device's usage counter on
+  errors, so consider using pm_runtime_resume_and_get() instead of it, especially
+  if its return value is checked by the caller"*. The failure it prevents is a
+  leaked usage count that pins the device awake forever — invisible in testing,
+  and one of the standing review comments on V4L2 sensor drivers.
+- **ASoC controls.** An on/off control is a **Switch**, not a two-entry enum:
+  *"On/off switches should be a Switch control, not an enum."* And a new control
+  follows the behaviour the rest of that driver already has — *"Other controls in
+  this driver ignore writes before hw_init is set, should this one?"* — because a
+  driver that answers a write differently in two places is the inconsistency the
+  reviewer reads first.
+- **Everywhere.** Before adding a control, a property or a sysfs value, grep the
+  subsystem for the same concept under its established name. The generic version
+  of every bullet above is: the interface is the subsystem's, not this driver's.
+
+**Tags are attributions, and most of them need permission.**
+`submitting-patches.rst` §"Tagging people requires permission": every trailer
+naming a person **except `Cc:`, `Reported-by:` and `Suggested-by:`** needs that
+person's explicit permission. So the duty to
+[carry `Reviewed-by:`/`Tested-by:` forward](#self-review-read-the-diff-not-just-the-series)
+has an exact mirror: ☠️ **never add one that was not given.** A reviewer who
+commented, or whose objection you addressed, has not thereby reviewed the next
+version — *"You can't add Reviewed-by: tags that haven't been explicitly (or
+otherwise) given"* is a real review reply, and the reason is that the tags stop
+meaning anything if senders infer them. This is a fabrication risk in exactly the
+shape [Factual integrity](#factual-integrity--overrides-everything-below)
+describes: a plausible trailer that no one wrote. Collect them mechanically —
+`b4 trailers -u` reads what was actually posted — rather than from memory.
+
 **Revision mechanics**, once a v1 has been reviewed (from
 [kernelnewbies PatchTipsAndTricks](https://kernelnewbies.org/PatchTipsAndTricks)):
 never hand-edit a generated patch's body or its subject beyond the `[PATCH vN]`
@@ -1776,6 +1848,18 @@ work — so a self-review that stops at "sparse is clean" is half done.
 - [ ] **Review tags carried forward**: every `Reviewed-by:`/`Tested-by:` from an
       earlier version is on the reposted patch; changelog is below the `---`; the
       generated patch body was not hand-edited.
+- [ ] **…and no tag was added that was not given.** Everything but `Cc:`,
+      `Reported-by:` and `Suggested-by:` needs the named person's explicit
+      permission; collected with `b4 trailers -u`, never inferred from "they
+      seemed satisfied".
+- [ ] **The subsystem's own units and idioms were read**: power-supply in
+      µV/µA/µAh/tenths of °C, `pm_runtime_resume_and_get()` rather than
+      `pm_runtime_get_sync()`, an ASoC on/off control as a Switch not an enum.
+- [ ] **`dt_binding_check` was run with an up-to-date dtschema**
+      (`pip3 install dtschema --upgrade`), the `$id` matches the file's path and
+      name, and the example compiles with every `required:` property present.
+- [ ] **No content-free ping.** At least a couple of weeks, then *resend* the
+      series rather than pinging it.
 - [ ] DT work is **warning-free** — and measured as a **differential**, because this
       base fails `dtbs_check` 44 times by itself. `make dt_binding_check` for every
       binding touched, `yamllint` against the bindings' own config, and `CHECK_DTBS=y`
