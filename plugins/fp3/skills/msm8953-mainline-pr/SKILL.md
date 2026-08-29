@@ -283,6 +283,14 @@ consequence plainly: *"Do not attempt to copy any code as-is from downstream. In
 general this won't work, and most importantly: it won't be accepted for inclusion
 into the mainline kernel upstream. Instead, try to understand what the downstream
 code does, and rewrite it from scratch for mainline by looking at similar code."*
+☠️ **The same applies to the device tree, and the reason is worth keeping**: *"Do
+not take the downstream device tree as a base or even copy it as-is. That is the
+wrong approach. Downstream code tends to be full of mistakes and unnecessarily
+verbose. It's easier to start from scratch and rather take something in mainline as
+a base."* Start from a mainline board DT of the same SoC and add what you have
+*measured*; the downstream DT tells you which pin and which supply, not what your
+node should look like.
+
 So a vendor tree is evidence — register sequences, magic values, which pin does
 what — and its *findings* are citable
 ([provenance](#2b-split-the-import-from-the-invention-and-make-the-import-traceable)
@@ -867,6 +875,18 @@ form. None of these are judgement calls; each cost somebody a round trip.
 - **Generic node names.** `fuel-gauge@55`, `nfc@8`, `touchscreen@…` — the class of
   device, per the DT spec, never the part number (`bq27541-battery@55`). The part
   number is what `compatible` is for.
+- **The file has a fixed shape, not just the nodes.** The convention the qcom
+  board DTs follow, spelled out on the pmOS MSM8916 page: SPDX line, `/dts-v1/;`,
+  the `#include`s, then the root node carrying `model`, `compatible`
+  (`"<vendor>,<codename>", "qcom,<soc>"`) and `chassis-type`, then `aliases` and
+  `chosen` (`stdout-path`), then an **alphabetically ordered** list of new nodes;
+  after the root node an **alphabetically ordered** list of `&reference` overrides —
+  and **pinctrl (`&tlmm`) always last**.
+- ☠️ **Every GPIO the board uses gets a pinctrl entry**, even one that already
+  works. *"This is good practice in case they were incorrectly configured by the
+  previous bootloader or operating system (consider kexec booting another Linux
+  kernel)."* A pin that works only because lk2nd left it in the right state is a
+  bug that appears on somebody else's bootloader, not on yours.
 - **Nodes go in address order, not at the end of the file.** A new `spi@78b7000`
   belongs after `i2c@75b9000`, and inside a node the property order is the one
   `dts-coding-style.rst` fixes, with `status` last before the child nodes.
