@@ -226,7 +226,10 @@ The fork's topic branches accumulate one commit per thing you learned. When the
 change is *fixing existing code*, collapse those discovery steps into few,
 well-formed commits. Fifteen incremental commits become a handful of logical ones.
 Keep a genuinely standalone bugfix as its own commit (so it can carry `Fixes:`),
-but squash the "and then I also had to…" follow-ups into their final form.
+but squash the "and then I also had to…" follow-ups into their final form. The
+other wall of the corridor: **do not over-split either** — the process guide's
+example is a developer who sent 500 patches for edits to one file, and a single
+patch may be large as long as it is one *logical* change.
 
 ### 2a. Ordering a split so that every patch builds on its own
 
@@ -259,7 +262,13 @@ Ordering it this way also puts the patch that touches *other people's drivers*
 last and smallest, which is where you want the reviewer's risk to be.
 
 Check it rather than reasoning about it — build every intermediate commit, not
-just the tip.
+just the tip. And the bar is higher than compiling: *"Each patch should yield a
+kernel which builds and runs properly; if your patch series is interrupted in the
+middle, the result should still be a working kernel"* — `git bisect` applies a
+series partially by definition. The same reasoning forbids the other tempting
+shape, ☠️ **infrastructure added by one patch and left unused until a later one**:
+*"if that series adds regressions, bisection will finger the last patch as the one
+which caused the problem, even though the real bug is elsewhere."*
 
 ### 2b. Split the import from the invention, and make the import traceable
 
@@ -1439,6 +1448,10 @@ GitHub-flow conveniences any more.
   **imperative mood** ("add", not "added"), body wrapped at **~75 columns**. Add a
   `Fixes: <12-char-sha> ("subject")` tag when fixing a known commit, and `Cc:
   stable@vger.kernel.org` for a user-visible bugfix (e.g. the TX front-end hold).
+  **`Link:` only when it points at something the commit does not itself contain**;
+  a public bug report being fixed takes **`Closes:`** instead. ☠️ *"Private bug
+  trackers and invalid URLs are forbidden"* — no vendor-internal tracker, and no
+  URL you have not fetched.
 - **A pasted oops/trace is trimmed, not transplanted.** `submitting-patches.rst`
   §"Backtraces in commit messages": distill the dump — drop timestamps, module
   lists, register and stack dumps, and the generic entry/syscall tail
@@ -1466,16 +1479,33 @@ GitHub-flow conveniences any more.
   `git log --oneline -20 -- <the file you are touching>`; copy the prefix shape you
   see there rather than inventing one. (He adds *"There's no need to resubmit to
   fix this alone"* — fix it in the next version.)
-- **`scripts/checkpatch.pl --strict`** clean; **`scripts/get_maintainer.pl`** on
-  the generated patch file to build the recipient set:
+- **`scripts/checkpatch.pl --strict`** clean — but it *"is not smarter than you.
+  If fixing a checkpatch.pl complaint would make the code worse, don't do it"*; say
+  why in the cover letter when you don't (see
+  [the false positives seen here](#checkpatch-false-positives-seen-on-this-hardware)).
+- **Recipients: `get_maintainer.pl` on the generated patch files**, then err on the
+  side of more copies — the subsystem list, the developers who recently touched
+  these files (`git log -- <file>`), whoever reported the bug, and
+  `stable@vger.kernel.org` for a user-visible fix.
   ```sh
   git format-patch -o /tmp/pset <base>..submit/audio
   scripts/get_maintainer.pl /tmp/pset/0001-*.patch
   ```
-- **Send with `git send-email`, inline — never as an attachment.** It applies the
-  `[PATCH n/m]` subject prefix, the `---` separator and the trailers for you. A
-  multi-patch series gets a `--cover-letter` (state the base and any
-  driver→DTS dependency there).
+- **The mail form, all of it in one place.** `git send-email`, inline plain text,
+  one patch per mail with its own subject and description, the diff rooted at the
+  kernel tree (`-p1`, what `git format-patch` emits), a `--cover-letter` for a
+  series stating the base and any driver→DTS dependency. It applies the
+  `[PATCH n/m]` prefix, the `---` separator and the trailers for you. What each of
+  those replaces is a way a patch never reaches a human: an attachment or base64
+  (unquotable), ☠️ **HTML mail** (`vger` filters it, so only the maintainer ever
+  sees the series and the sender cannot tell), a 300 KB mail carrying five patches,
+  thirteen mails sharing one subject and no body, or a "please review" whose
+  content is a link to a branch. ☠️ **Prove it before the list sees it**: send the
+  series to yourself and `git am` it back — *"Patches which have had gratuitous
+  white-space changes or line wrapping performed by the mail client will not apply
+  at the other end"* (`email-clients.rst` has the per-client settings). Wrap your
+  **prose** too, in patches and replies alike: *"Please fix your mail client to
+  word wrap within paragraphs at something substantially less than 80 columns."*
 - **`b4`** automates much of this (dependency tracking, checkpatch, formatting and
   sending) — worth using once the series grows.
 - **Build in the pmOS chroot.** `pmbootstrap`'s `envkernel.sh` gives the
@@ -1494,27 +1524,10 @@ subsystem maintainer*, parts 1–6, 2005-03-31 … 2011-08-08 —
 site is **plain HTTP with no TLS**; a fetcher that upgrades to `https://` gets
 `ECONNREFUSED`, so read it with `curl http://…`.)
 
-**Mail form — the ways a patch never reaches a human.**
-
-- **Inline plain text only.** Not an attachment, not base64, and ☠️ **never
-  HTML** — `vger.kernel.org` filters HTML mail, so the list never sees it and the
-  maintainer is the only recipient. That is part 6's second failure, and it is
-  invisible from the sender's side: the mail "went out" and nobody replied.
-  `git send-email` gets this right; a mail client usually does not.
-- **The diff is offset to the root of the kernel tree** (`-p1`, what
-  `git format-patch` emits). Anything else is hand work for the reader.
-- **Wrap your prose too.** Mark Brown, to a submitter whose replies arrived as
-  single long lines: *"Please fix your mail client to word wrap within paragraphs
-  at something substantially less than 80 columns. Doing this makes your messages
-  much easier to read and reply to."* This applies to the discussion, not just the
-  patch — and quote-trimming is the same courtesy.
-- ☠️ **Send the patches, not a pointer to a tree.** A "please review" whose
-  content is a link to a git/forge branch is not a submission — the review happens
-  in the mail thread, on the text of the patch.
-- **One patch per mail, each with its own subject and its own description.** Not
-  one 300 KB mail carrying five patches (part 3), and not thirteen mails sharing a
-  single subject line and no body (part 5). Volume is a courtesy question too: a
-  hundred-patch drop lands on a person.
+**Mail form** — every rule Greg's parts 1, 3 and 6 supply (no attachment, no
+base64, no HTML, `-p1`, one patch per mail, patches not a branch link) now lives
+in [Patch mechanics](#patch-mechanics-the-lkml-email-path) beside the command that
+implements it. What follows is the half no tool can do for you.
 
 **Routing and timing.**
 
@@ -1533,18 +1546,13 @@ site is **plain HTTP with no TLS**; a fetcher that upgrades to `https://` gets
   patches have not been applied is precisely part 6. Give weeks, not days.
 - ☠️ **Do not ping — resend.** Mark Brown, 2026-06-10, to a "Gentle ping on that
   fix": *"Please don't send content free pings and please allow a reasonable time
-  for review. People get busy, go on holiday, attend conferences and so on so
-  unless there is some reason for urgency (like critical bug fixes) please allow
-  at least a couple of weeks for review. If there have been review comments then
-  people may be waiting for those to be addressed. Sending content free pings adds
-  to the mail volume (if they are seen at all) which is often the problem and since
-  they can't be reviewed directly if something has gone wrong you'll have to resend
-  the patches anyway, so sending again is generally a better approach though there
-  are some other maintainers who like them - if in doubt look at how patches for
-  the subsystem are normally handled."*
+  for review… at least a couple of weeks… since they can't be reviewed directly if
+  something has gone wrong you'll have to resend the patches anyway, so sending
+  again is generally a better approach… if in doubt look at how patches for the
+  subsystem are normally handled."*
   (<https://lore.kernel.org/all/aimBR9VyYnK8CpBD@sirena.co.uk/>) Two weeks is the
-  number; a resend is the move; and the last clause is a method in itself — when a
-  subsystem's habit is unknown, read its list before assuming this one.
+  number, a resend is the move, and the last clause is a method by itself: when a
+  subsystem's habit is unknown, read its list rather than assume this one's.
 
 **Answering a review.**
 
@@ -1561,10 +1569,28 @@ site is **plain HTTP with no TLS**; a fetcher that upgrades to `https://` gets
   (`Link:`), and I will find out" is an acceptable answer. A fabricated one is not
   survivable.
 - **Act on the correction.** Re-sending in v2 the form a reviewer already
-  rejected — style comments ignored, the split not done — is part 1's second item
-  and reads as contempt. The counterpart duty is
+  rejected — style comments ignored, the split not done — is part 1's second item,
+  and `6.Followthrough.rst` states the consequence flatly: *"If you repost code
+  without having responded to the comments you got the time before, you're likely
+  to find that your patches go nowhere."* The counterpart duty is
   [Revision mechanics](#self-review-read-the-diff-not-just-the-series): carry
   every `Reviewed-by:`/`Tested-by:` forward.
+- ☠️ **Andrew Morton's rule:** *"every review comment which does not result in a
+  code change should result in an additional code comment instead"* — a question
+  one reviewer had is a question the next reader will have, and this is the
+  cheapest way a review round leaves something permanent in the tree.
+- **The changelog answers the last round, it does not merely list diffs.**
+  *"Reviewers should not have to search through list archives to familiarize
+  themselves with what was said last time."*
+- **Disagreeing is allowed; digging in is not.** Explain and justify — but
+  *"should your explanation not prove persuasive… especially if others start to
+  agree with the reviewer, take some time to think things over again."* The
+  question behind most comments is *"what will it be like to maintain a kernel
+  with this code in it five or ten years later?"*, which is also the answer to
+  "why must my clever hack become a generic feature".
+- **Expect a second wave.** Entering a subsystem tree and then linux-next puts the
+  series in front of new reviewers and surfaces conflicts with other people's
+  work; that round is normal, not a setback.
 
 **How a series gets dropped without a NAK.** On the qcom/DT lists the quiet
 failure has an explicit form: the maintainer replies *"Dropping from Patchwork"*
@@ -1572,14 +1598,14 @@ and the series leaves the queue. Harvested 2026-08-29, the reasons that actually
 produced that sentence in recent months — each one is a rule stated elsewhere in
 this skill, here in the form it fails in:
 
-- **An incomplete recipient set.** *"You missed at least devicetree list (maybe
-  more), so this won't be tested by automated tooling. Performing review on
-  untested code might be a waste of time."* The point is not etiquette: the DT
-  list is where the automated checkers and review bots subscribe, so a missing
-  list means nothing machine-readable ever ran. `get_maintainer.pl` on the
-  *generated patch files* is the fix, and asserting you ran it is not a
-  substitute for the result — a submitter who claimed it and still missed the
-  list got *"Still not. I do not believe you did it."*
+- **An incomplete recipient set** (mechanics in
+  [Patch mechanics](#patch-mechanics-the-lkml-email-path)). The point is not
+  etiquette: *"You missed at least devicetree list (maybe more), so this won't be
+  tested by automated tooling. Performing review on untested code might be a waste
+  of time."* The DT list is where the checkers and review bots subscribe, so a
+  missing list means nothing machine-readable ever ran — and asserting you ran
+  `get_maintainer.pl` is not the same as the result: a submitter who claimed it and
+  still missed the list got *"Still not. I do not believe you did it."*
 - **An unanswered review comment — including a bot's.** Krzysztof Kozlowski,
   2026-08-27: *"Sashiko comment was not answered and looks reasonable, dropping
   from Patchwork."*
@@ -1666,99 +1692,34 @@ Three duties follow, and they are the price of this door being open at all:
   opposite of what its author wanted. Building every intermediate commit and a
   green `fp3-selftest` on the rebased series are what stand in for "run it" here.
 
-### From the in-tree upstreaming guide (`Documentation/process/5.Posting.rst`, `6.Followthrough.rst`)
+### From the in-tree upstreaming guide (`5.Posting.rst`, `6.Followthrough.rst`)
 
-The kernel's own end-to-end guide to submitting is the seven-part
-*development-process* series; `submitting-patches.rst` is the reference, but
-these two parts are the narrative, and they state rules the rest of this skill
-only implied. Distilled 2026-08-29:
+The kernel's own end-to-end guide is the seven-part *development-process* series.
+Most of what it says is distributed through this skill next to the action it
+governs — the mail form and recipients in
+[Patch mechanics](#patch-mechanics-the-lkml-email-path), the bisect rules under
+[§2a](#2a-ordering-a-split-so-that-every-patch-builds-on-its-own), the review
+duties under [Conduct](#conduct-on-the-list--the-ways-a-series-dies-with-no-technical-objection).
+Four rules have no other home:
 
-**Before and while splitting.**
-
-- **Post complex work before it is finished, and label it.** *"There is a lot to
-  be gained by getting feedback from the community before the work is
-  complete… When posting code which is not yet considered ready for inclusion, it
-  is a good idea to say so in the posting itself. Also mention any major work
-  which remains to be done and any known problems."* For a port that has lived
-  out-of-tree for a long time this is the antidote to the "never reviewed by
-  anyone" problem: an `[RFC]` that says what is missing invites the structural
-  comments early, when they are cheap.
-- ☠️ **Every patch must build *and run*.** Not just compile: *"Each patch should
-  yield a kernel which builds and runs properly; if your patch series is
-  interrupted in the middle, the result should still be a working kernel"* —
-  because `git bisect` applies your series partially by definition.
-- ☠️ **New code is active in the patch that adds it.** *"It can be tempting to add
-  a whole new infrastructure with a series of patches, but to leave that
-  infrastructure unused until the final patch… if that series adds regressions,
-  bisection will finger the last patch as the one which caused the problem, even
-  though the real bug is elsewhere."*
-- **Do not overdo the splitting either** — the guide's example is a developer who
-  sent 500 patches for edits to one file. A single patch may be large if it is one
-  *logical* change. This is the other wall of the corridor from "reduce the number
-  of commits".
-- **Performance claims come with numbers.** *"Does your change have performance
-  implications? If so, you should run benchmarks showing what the impact (or
-  benefit) of your change is; a summary of the results should be included with the
-  patch."* On this port that is the same discipline as measuring on the device:
+- **Post complex work before it is finished, and say so.** *"There is a lot to be
+  gained by getting feedback from the community before the work is complete… it is
+  a good idea to say so in the posting itself. Also mention any major work which
+  remains to be done and any known problems."* For a port that has lived
+  out-of-tree for years this is the antidote to never having met an outside
+  reviewer: an `[RFC]` naming what is missing buys the structural comments early,
+  when they are still cheap to act on.
+- **Performance claims come with numbers.** *"If so, you should run benchmarks
+  showing what the impact (or benefit) of your change is; a summary of the results
+  should be included with the patch."* Same discipline as measuring on the device:
   put the before/after in the message.
-- **Be sure you have the right to post the code.** Employer rights, and — the case
-  that actually arises here — code or values lifted from a vendor tree: what is
+- **Be sure you have the right to post the code.** Employer rights — and the case
+  that actually arises here, code or values lifted from a vendor tree: what is
   imported must be licence-compatible and attributed, not merely useful.
-
-**Formatting and tags.**
-
-- **`Link:` only when it adds something the commit does not contain**, per the
-  guide's "Chief Penguin" note; a public bug report being fixed uses **`Closes:`**
-  instead. ☠️ *"Private bug trackers and invalid URLs are forbidden"* — so a link
-  into a vendor's internal tracker, or a URL you have not fetched, must not appear.
-- **The one-line summary must stand alone**: subsystem prefix, then the effect, and
-  readable by someone with no other context.
-- **If a problem is associated with specific log or compiler output, include that
-  output** so others searching for the same failure find your commit.
-
-**Sending.**
-
-- ☠️ **Mail the patch to yourself first and check it survived.** *"Are you sure
-  that your mailer will not corrupt the patches? Patches which have had gratuitous
-  white-space changes or line wrapping performed by the mail client will not apply
-  at the other end"* — one self-addressed send, then `git am` it back, proves it.
-  `email-clients.rst` has the per-client settings.
-- **Err on the side of too many copies.** Beyond `get_maintainer.pl`: the
-  developers who have recently touched these files (`git log -- <file>`), whoever
-  reported the bug, the subsystem list, and `stable@vger.kernel.org` for a
-  user-visible fix (plus the `Cc: stable` tag in the patch itself).
-- **checkpatch is not the authority.** *"checkpatch.pl… is not smarter than you.
-  If fixing a checkpatch.pl complaint would make the code worse, don't do it."*
-  Run it, address it, and say why when you do not — the counterpart to the
-  [false positives seen on this hardware](#checkpatch-false-positives-seen-on-this-hardware).
-
-**After posting — the half that is not optional.**
-
-- **The question behind most review comments** is *"what will it be like to
-  maintain a kernel with this code in it five or ten years later?"* — which is why
-  the answer to "why must my clever hack become a generic feature" is: because
-  somebody will maintain it after both of you.
-- ☠️ **Ignoring comments does not make them go away.** *"If you repost code without
-  having responded to the comments you got the time before, you're likely to find
-  that your patches go nowhere."* This is the in-tree statement of the
-  [dropped-from-Patchwork](#conduct-on-the-list--the-ways-a-series-dies-with-no-technical-objection)
-  behaviour observed on the qcom lists.
-- ☠️ **Andrew Morton's rule:** *"every review comment which does not result in a
-  code change should result in an additional code comment instead"* — a question a
-  reviewer had is a question the next reader will have. This is the cheapest way a
-  review round leaves something permanent behind.
-- **Re-state, in the changelog, what was raised last time and how you handled it.**
-  *"Reviewers should not have to search through list archives to familiarize
-  themselves with what was said last time."* So the below-`---` changelog is not a
-  list of diffs; it is an answer sheet.
-- **Disagreeing is allowed, digging in is not.** Explain and justify; *"Should your
-  explanation not prove persuasive, though, especially if others start to agree
-  with the reviewer, take some time to think things over again."* And when a review
-  reads as angry, answer the technical content and nothing else.
-- **Expect a second wave.** Entering a subsystem tree and then linux-next puts the
-  series in front of new reviewers and surfaces conflicts with other people's work;
-  that round is normal, not a setback. And merging is not the end — a new driver
-  means a MAINTAINERS entry and the regressions that follow.
+- **The one-line summary stands alone.** Subsystem prefix, then the effect,
+  readable by someone with no other context; and if a specific log or compiler
+  output identifies the problem, put that output in the body so the next person
+  searching for it lands here.
 
 ---
 
@@ -1976,167 +1937,146 @@ work — so a self-review that stops at "sparse is clean" is half done.
 
 ## Pre-submit checklist
 
+Grouped, and each line is the *whole* rule — the sections above carry the why.
+
+**Destination and base**
+
 - [ ] Destination is **LKML** — msm8953-mainline will not merge AI-assisted work,
-      pmOS bans it. No PR against `7.1.3/main`.
-- [ ] Base is correct and fresh (driver → `sound/for-next`; DTS → fresh torvalds).
-      Never `7.0.9/main`, never a stale mirror, never a shallow clone's idea of history.
-- [ ] **One branch for the whole subsystem** (audio/camera/charger/modem), not sub-split.
-- [ ] Commit count reduced; discovery steps consolidated; standalone bugfix kept apart.
-- [ ] **No commit mixes `.dts`/`.dtsi` with `.c`/`.h`.**
-- [ ] **No board/battery fact hidden in the driver.** Grep the diff for constants
-      *added* to a variant/quirk table and justify each from a datasheet or a register
-      width; policy numbers belong in the device tree. Ask: applied to every board this
-      file serves, is each still described correctly?
-- [ ] **Every vendor-sourced value can answer two questions**, not one: where it came
-      from, *and* how we know that variant applies to this board. If the vendor tree
-      ships alternatives (`ls` it), name the discriminator and the reading.
-- [ ] DTS split **per logical step**; no style/cleanup riding along with function.
-- [ ] **Every node the DTS adds or enables is real and was measured working.** No
-      node exists only to instantiate a Linux driver (no `reg`/irq/clock/supply of
-      its own = dead code); nothing inherited untested from the vendor tree is
-      enabled — a not-yet-working node stays `status = "disabled"` in the SoC DTSI
-      or stays out of the series. Checked on the device, not asserted: no node the
-      series adds is left unbound (see
-      [Only what is real and measured](#only-what-is-real-and-measured-goes-into-the-dts)).
-- [ ] Rebased across the base bump; **rebuilt + CONFIG-checked + `fp3-selftest` green.**
-- [ ] `scripts/checkpatch.pl --strict` clean; `scripts/get_maintainer.pl` used for
-      the recipient set.
-- [ ] **The recipient set actually contains the DT list and the subsystem list** —
-      checked in the generated `To:`/`Cc:`, not asserted. Missing lists mean no
-      automated tooling runs, which is a documented reason for a series to be
-      dropped rather than reviewed.
-- [ ] **Every comment on the previous version was answered** in the changelog or
-      in a reply — including comments from a review bot — and no tag given earlier
-      was silently dropped.
+      pmOS bans it. No PR against `<base>/main`.
+- [ ] Base is correct and fresh (driver → the subsystem `-next`, e.g.
+      `sound/for-next`; DTS → fresh torvalds), and the series was **trial-rebased
+      onto it** on a throwaway head. Never a stale mirror, never a shallow clone's
+      idea of history; "the files exist upstream" answers a different question.
+- [ ] Rebased across any base bump; **rebuilt + CONFIG-checked + `fp3-selftest`
+      green** on the rebased series.
+
+**Shape of the series**
+
+- [ ] **One branch for the whole subsystem** (audio/camera/charger/sensor/voice),
+      not sub-split; commit count reduced, discovery steps consolidated, a
+      standalone bugfix kept apart so it can carry `Fixes:`.
+- [ ] **Every patch builds *and boots* on its own**, and none adds infrastructure
+      that stays unused until a later patch.
+- [ ] **No commit mixes `.dts`/`.dtsi` with `.c`/`.h`**, and the DTS side is split
+      per logical step with no style/cleanup riding along.
+- [ ] **The import is its own commit**, byte-identical and attributed, with your
+      changes in the next one and any style cleanup in a third.
+- [ ] **`git diff wip/<base>/<cat> submit/<base>/<cat>` is empty** — no fix applied
+      on the submit side only.
 - [ ] **Interdependent changes are in one series**, not two submissions citing each
-      other; `Depends-on:` is not a kernel tag. A *foreign* posted prerequisite is
-      cited with `b4`'s `prerequisite-patch-id:` instead.
-- [ ] **Nothing pasted from a model into the thread.** The `Assisted-by:` trailer
-      stays (removing a true disclosure is falsifying it), but every reply on the
-      list is written and checked by the human sending it, and trivial one-liners
-      are folded into the series they belong to rather than sent alone
-      (see [How a series gets dropped](#conduct-on-the-list--the-ways-a-series-dies-with-no-technical-objection)).
-- [ ] **Binding form**: filename matches the compatible, existing binding not
-      renamed, subject is `dt-bindings: <subsystem>: Add <device>` naming hardware
-      rather than a driver, and two sibling bindings in the same directory were
-      read for the established pattern (`minItems` and friends).
-- [ ] **DTS form**: GPIO flags state the logical level (`GPIO_ACTIVE_LOW` for an
-      active-low reset, even if an in-tree driver has it backwards),
-      `interrupts-extended` rather than `interrupt-parent` + `interrupts`, no pin
-      *levels* in a pinctrl state, generic node names (`fuel-gauge@`, not the part
-      number).
-- [ ] **The checker gauntlet was run and named**: `make W=1` over the touched files
-      adds no warning, `sparse` (`make C=2`) is clean, `coccicheck` run — and the
-      cover letter says which ran (see [Self-review](#self-review-read-the-diff-not-just-the-series)).
-- [ ] **The diff was read for the four a checker misses**: locking dropped on every
-      path incl. error, error paths free what success allocated, register types match
-      the hardware not the C default, message says *why* in imperative mood.
-- [ ] **Review tags carried forward**: every `Reviewed-by:`/`Tested-by:` from an
-      earlier version is on the reposted patch; changelog is below the `---`; the
-      generated patch body was not hand-edited.
-- [ ] **…and no tag was added that was not given.** Everything but `Cc:`,
-      `Reported-by:` and `Suggested-by:` needs the named person's explicit
-      permission; collected with `b4 trailers -u`, never inferred from "they
-      seemed satisfied".
-- [ ] **The subsystem's own units and idioms were read**: power-supply in
-      µV/µA/µAh/tenths of °C, `pm_runtime_resume_and_get()` rather than
-      `pm_runtime_get_sync()`, an ASoC on/off control as a Switch not an enum.
-- [ ] **regmap describes the hardware**: every status/interrupt/hardware-updated
-      register is in `volatile_reg` and carries no default, and a mixer `put()`
-      returns 1 only when the value actually changed.
-- [ ] **No properties were added to a legacy `.txt` binding** — it is converted to
-      YAML first, as its own patch — and each new compatible names one SoC even
-      where a single driver serves the family.
-- [ ] **Imported register tables were brought to house style**: lowercase hex, no
-      stray parentheses, no needless initialisers, `clamp()` instead of a min/max
-      ladder.
-- [ ] **Binding schema mechanics**: hyphens not underscores in property names,
-      every vendor property typed via `types.yaml`, a `$ref` to the common schema
-      for pattern-matched subnodes, and a standard property used wherever one
-      exists.
-- [ ] **Subject lines visually match the subsystem's own** —
-      `git log --oneline -20 -- <file>` before naming the patch.
-- [ ] **Every patch builds *and boots* on its own**, and no patch adds
-      infrastructure that stays unused until a later one.
-- [ ] **The series was mailed to yourself first** and `git am`-ed back intact.
-- [ ] **`Link:` adds something the commit does not**; a public bug report uses
-      `Closes:`; no private tracker URL and no link that was not fetched.
-- [ ] **The changelog answers the previous round** — what was raised, how it was
-      handled — and every comment that produced no code change produced a code
-      comment instead.
-- [ ] **`dt_binding_check` was run with an up-to-date dtschema**
-      (`pip3 install dtschema --upgrade`), the `$id` matches the file's path and
-      name, and the example compiles with every `required:` property present.
-- [ ] **No content-free ping.** At least a couple of weeks, then *resend* the
-      series rather than pinging it.
-- [ ] DT work is **warning-free** — and measured as a **differential**, because this
-      base fails `dtbs_check` 44 times by itself. `make dt_binding_check` for every
-      binding touched, `yamllint` against the bindings' own config, and `CHECK_DTBS=y`
-      on the real board DTB.
+      other (`Depends-on:` is not a kernel tag). A *foreign* posted prerequisite is
+      declared with `b4`'s `prerequisite-patch-id:`, found by searching patchwork
+      for the file name; never posted at all means the series is not sendable.
+
+**Device tree and bindings**
+
+- [ ] **Every node the DTS adds or enables is real and was measured working** — no
+      node exists only to instantiate a driver (no `reg`/irq/clock/supply of its
+      own), nothing inherited untested from the vendor tree is enabled, and a
+      not-yet-working node stays `status = "disabled"` in the SoC DTSI. Verified on
+      the device: nothing the series adds is left unbound.
+- [ ] **No board/battery fact hidden in the driver.** Grep the diff for constants
+      added to a variant/quirk table; policy numbers belong in the DT. Applied to
+      every board this file serves, is each still described correctly?
+- [ ] **Every vendor-sourced value answers two questions**: where it came from, and
+      how we know that variant applies to *this* board (name the discriminator and
+      the reading when the vendor tree ships alternatives).
+- [ ] **DTS form**: GPIO flags state the logical level even where an in-tree driver
+      has it backwards, `interrupts-extended`, no pin levels in a pinctrl state,
+      generic node names, nodes in address order, `reg` covering the whole block.
+- [ ] **Binding form**: filename matches the compatible, no rename of an existing
+      binding, subject `dt-bindings: <subsystem>: Add <device>` naming hardware,
+      hyphens not underscores, vendor properties typed via `types.yaml`, `$ref` to
+      the common schema for pattern-matched subnodes, standard property preferred,
+      two sibling bindings read for the established pattern.
+- [ ] **No property added to a legacy `.txt` binding** — convert to YAML first, as
+      its own patch — and each new compatible names one SoC even where one driver
+      serves the family.
+- [ ] **DT work is warning-free, measured as a differential** (this base fails
+      `dtbs_check` by itself): `dt_binding_check` with an up-to-date dtschema
+      (`pip3 install dtschema --upgrade`), `$id` matching the file path, the example
+      compiling with every `required:` property, `yamllint` against the bindings'
+      config, `CHECK_DTBS=y` on the real board DTB.
 - [ ] **A new compatible has a binding.** Until it does, `dtbs_check` skips its node
       **silently**, so a clean run proves nothing about it.
-- [ ] **`git diff wip/<base>/<cat> submit/<base>/<cat>` is empty** — no style fix
-      applied on the submit side only.
-- [ ] **The immediate source of every imported file is named**, not just the ancestor
-      it is structured on: grep the project's own bring-up notes, and read the imported
-      code's comments before writing the provenance paragraph. Take the fields from the
-      **commit**, never from a merge-request page or a remembered nickname — the person
-      who opened the MR is often not the author.
-- [ ] **The original file was fetched and diffed**, so the delta is a number and not an
-      impression. If the forge search failed, it was searched on the *right* forge —
-      a 404 is a fact about the URL. And the byte-identical import is its own commit,
-      with any style cleanup in a third one.
-- [ ] **Nothing in the series rests on a commit with no `Signed-off-by`** — an imported
-      WIP cannot be signed on its author's behalf. And check patchwork: if the author's
-      own series is in flight, reply to it instead of competing with it.
-- [ ] **For every file not in Linus' tree, someone else's tree was searched for prior
-      art before the patch was written** — not after. On an out-of-tree subsystem the
-      thing you are about to discover may already exist, more generally, elsewhere.
-- [ ] **The series was trial-rebased onto the destination tree**, per subsystem tip,
-      on a throwaway head. "The files exist upstream" is a different question and gets
-      the answer wrong in both directions.
-- [ ] **Any prerequisite is declared, not assumed**: patchwork searched by file name,
-      and if the dependency was posted, cited via `b4 prep --edit-deps` /
-      `prerequisite-patch-id:`. If it was never posted, the series is not sendable and
-      publishing its base to our fork does not change that.
+
+**The code**
+
+- [ ] **The checker gauntlet was run and named in the cover letter**:
+      `checkpatch --strict` per patch, `make W=1` over the touched files adding no
+      warning, `sparse` (`make C=2`), `coccicheck`.
+- [ ] **The diff was read for what no checker sees**: locking dropped on every path
+      including error ones (and an `atomic_t` is not a lock), error paths freeing
+      what success took, register types from the datasheet not the C default,
+      nothing registered before it is initialised, power sequenced before reset.
+- [ ] **The subsystem's own idioms were used**: power-supply in µV/µA/µAh/tenths of
+      °C, `pm_runtime_resume_and_get()`, one pair of power functions, an ASoC on/off
+      control as a Switch whose `put()` returns 1 only on a real change, a V4L2
+      sensor exposing a read-only `LINK_FREQ` beside `PIXEL_RATE`, `volatile_reg`
+      covering every status/interrupt register and no defaults on them.
+- [ ] **Imported register tables brought to house style**: lowercase hex, no stray
+      parentheses, no needless initialisers, `clamp()` over a min/max ladder.
+
+**Provenance and authorship**
+
+- [ ] Human `Signed-off-by` on **every** commit — audit for empty trailers; **no
+      `Signed-off-by` from the AI**; `Co-authored-by:` swapped for `Assisted-by:`
+      naming the model that actually did the work.
+- [ ] **Nothing rests on a commit with no `Signed-off-by`** — an imported WIP cannot
+      be signed on its author's behalf; and if the author's own series is in flight
+      on patchwork, reply to it instead of competing with it.
+- [ ] **The immediate source of every imported file is named** — from the *commit*,
+      not a merge-request page or a remembered nickname — the original was fetched
+      and diffed so the delta is a number, and every borrowed piece carries its
+      authors and a `Link:`/`commit …` reference.
+- [ ] **Prior art was searched before writing, not after**, for every file not in
+      Linus' tree; `Fixes:` comes from `git blame` on the real tree, never from the
+      file's age.
+- [ ] Cover letter carries the `generated-content.rst` disclosure (tools, prompts or
+      a summary, which portions were tool-affected, how it was tested) and states the
+      base; a driver→DTS dependency is noted on the DTS patch.
+
+**The mail**
+
+- [ ] Commits are `-s` signed, imperative-mood, wrapped ~75 cols, subject lines
+      visually matching the subsystem's own (`git log --oneline -20 -- <file>`);
+      `Fixes:`/`Cc: stable` on bugfixes; `Link:` only when it adds what the commit
+      does not, `Closes:` for a public bug report, no private tracker URL and no
+      unfetched link.
+- [ ] **Any oops/trace is trimmed** per `submitting-patches.rst` §Backtraces — no
+      timestamps, module lists, register/stack dumps or generic syscall tail — with
+      the oops *header* kept.
+- [ ] **The mail is submittable**: `git send-email`, inline plain text, `-p1`, one
+      patch per mail with its own subject and description, no attachment/base64/HTML,
+      no branch link in place of patches — **proved by mailing it to yourself and
+      `git am`-ing it back**.
+- [ ] **Recipients from `get_maintainer.pl` on the generated patches**, DT list and
+      subsystem list actually present in the `To:`/`Cc:` (checked, not asserted —
+      a missing list means no automated tooling runs), plus recent touchers and
+      `stable@` where it applies. Nobody was routed around.
+- [ ] **Not sent into an open merge window**, and no content-free ping: a couple of
+      weeks, then resend.
+
+**The thread**
+
+- [ ] **Every comment on the previous version was answered** — including a review
+      bot's — in the changelog (below the `---`, saying what was raised and how it
+      was handled) or in a reply on the list; no tag given earlier was dropped.
+- [ ] **Review tags carried forward, and none added that was not given**: everything
+      but `Cc:`, `Reported-by:` and `Suggested-by:` needs explicit permission,
+      collected with `b4 trailers -u`; the generated patch body was not hand-edited.
+- [ ] **Every "why is this so?" has a checked answer** — no invented rationale, no
+      attribution to a person, tree or datasheet that was not verified — and every
+      comment that produced no code change produced a code comment instead.
+- [ ] **Nothing pasted from a model into the thread.** The `Assisted-by:` trailer
+      stays (removing a true disclosure falsifies it), every reply is written and
+      checked by the human sending it, and a trivial one-liner is folded into the
+      series it belongs to rather than sent alone.
 - [ ] **No published branch was force-pushed without tagging the old tip**, and any
-      pinned `_commit` still resolves (`curl -sI …/archive/<sha>.tar.gz` → 302).
-- [ ] **`Fixes:` taken from `git blame` on the real tree**, not from the file's age.
-- [ ] Commits are `-s` signed, imperative-mood, body wrapped ~75 cols; `Fixes:`/`Cc:
-      stable` on bugfixes.
-- [ ] **The mail itself is submittable**: sent with `git send-email`, inline plain
-      text — no attachment, no base64, **no HTML** (vger filters it silently, so the
-      list never sees the series); the diff is `-p1`, rooted at the kernel tree; one
-      patch per mail, each with its own subject and description; a link to a branch
-      is never a substitute for the patches.
-- [ ] **Routing is right and nobody was gone around**: recipients from
-      `get_maintainer.pl`, subsystem list Cc'd, the proper subsystem maintainer Cc'd
-      even when another tree carries the file — and the series was not re-sent to a
-      different maintainer to get it in another way.
-- [ ] **Not sent into an open merge window**; any ping waits weeks, is on-list and
-      in-thread (see [Conduct on the list](#conduct-on-the-list--the-ways-a-series-dies-with-no-technical-objection)).
-- [ ] **Every review answer goes to the list, and every "why is this so?" has a
-      checked answer** — no invented rationale, no attribution to a person, tree or
-      datasheet that was not verified; "imported from X, I will find out" beats a
-      fabrication.
-- [ ] **Any oops/trace in a commit message is trimmed** per
-      `submitting-patches.rst` §Backtraces — no timestamps, module lists,
-      register/stack dumps or generic syscall tail — and the oops *header* (the
-      lines above `Call trace:`) is kept.
-- [ ] **Every form question was answered from a stated rule, not from habit**: if
-      a linked doc governs a part this skill does not distill, that section was
-      fetched and read — and its rule added here (see "A rule that lives only
-      behind a link does not fire").
-- [ ] Human `Signed-off-by` on **every** commit — audit for the empty-trailer
-      commits; **no `Signed-off-by` from the AI**; `Co-authored-by:` swapped to
-      `Assisted-by:` naming the model that actually did the work.
-- [ ] **Every borrowed piece is credited**: work taken from an unmerged series,
-      a downstream tree, an out-of-tree fork or an in-tree driver used as a
-      skeleton names its authors and carries a `Link:`/`commit …` reference.
-- [ ] Cover letter carries the `generated-content.rst` disclosure: tools, prompts
-      (or a summary), which portions were tool-affected, and how it was tested.
-- [ ] Cover note states the base ("applies to sound/for-next").
-- [ ] For a series with a driver→DTS dependency, the DTS commit/patch notes it.
+      pinned `_commit` still resolves (`curl -sL …/archive/<sha>.tar.gz` → 200).
+- [ ] **Every form question was answered from a stated rule, not from habit**: if a
+      linked doc governs a part this skill does not distil, that section was fetched,
+      read — and its rule added here.
 
 ---
 
