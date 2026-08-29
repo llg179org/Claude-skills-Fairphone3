@@ -1666,6 +1666,102 @@ Three duties follow, and they are the price of this door being open at all:
   opposite of what its author wanted. Building every intermediate commit and a
   green `fp3-selftest` on the rebased series are what stand in for "run it" here.
 
+### From the in-tree upstreaming guide (`Documentation/process/5.Posting.rst`, `6.Followthrough.rst`)
+
+The kernel's own end-to-end guide to submitting is the seven-part
+*development-process* series; `submitting-patches.rst` is the reference, but
+these two parts are the narrative, and they state rules the rest of this skill
+only implied. Distilled 2026-08-29:
+
+**Before and while splitting.**
+
+- **Post complex work before it is finished, and label it.** *"There is a lot to
+  be gained by getting feedback from the community before the work is
+  complete… When posting code which is not yet considered ready for inclusion, it
+  is a good idea to say so in the posting itself. Also mention any major work
+  which remains to be done and any known problems."* For a port that has lived
+  out-of-tree for a long time this is the antidote to the "never reviewed by
+  anyone" problem: an `[RFC]` that says what is missing invites the structural
+  comments early, when they are cheap.
+- ☠️ **Every patch must build *and run*.** Not just compile: *"Each patch should
+  yield a kernel which builds and runs properly; if your patch series is
+  interrupted in the middle, the result should still be a working kernel"* —
+  because `git bisect` applies your series partially by definition.
+- ☠️ **New code is active in the patch that adds it.** *"It can be tempting to add
+  a whole new infrastructure with a series of patches, but to leave that
+  infrastructure unused until the final patch… if that series adds regressions,
+  bisection will finger the last patch as the one which caused the problem, even
+  though the real bug is elsewhere."*
+- **Do not overdo the splitting either** — the guide's example is a developer who
+  sent 500 patches for edits to one file. A single patch may be large if it is one
+  *logical* change. This is the other wall of the corridor from "reduce the number
+  of commits".
+- **Performance claims come with numbers.** *"Does your change have performance
+  implications? If so, you should run benchmarks showing what the impact (or
+  benefit) of your change is; a summary of the results should be included with the
+  patch."* On this port that is the same discipline as measuring on the device:
+  put the before/after in the message.
+- **Be sure you have the right to post the code.** Employer rights, and — the case
+  that actually arises here — code or values lifted from a vendor tree: what is
+  imported must be licence-compatible and attributed, not merely useful.
+
+**Formatting and tags.**
+
+- **`Link:` only when it adds something the commit does not contain**, per the
+  guide's "Chief Penguin" note; a public bug report being fixed uses **`Closes:`**
+  instead. ☠️ *"Private bug trackers and invalid URLs are forbidden"* — so a link
+  into a vendor's internal tracker, or a URL you have not fetched, must not appear.
+- **The one-line summary must stand alone**: subsystem prefix, then the effect, and
+  readable by someone with no other context.
+- **If a problem is associated with specific log or compiler output, include that
+  output** so others searching for the same failure find your commit.
+
+**Sending.**
+
+- ☠️ **Mail the patch to yourself first and check it survived.** *"Are you sure
+  that your mailer will not corrupt the patches? Patches which have had gratuitous
+  white-space changes or line wrapping performed by the mail client will not apply
+  at the other end"* — one self-addressed send, then `git am` it back, proves it.
+  `email-clients.rst` has the per-client settings.
+- **Err on the side of too many copies.** Beyond `get_maintainer.pl`: the
+  developers who have recently touched these files (`git log -- <file>`), whoever
+  reported the bug, the subsystem list, and `stable@vger.kernel.org` for a
+  user-visible fix (plus the `Cc: stable` tag in the patch itself).
+- **checkpatch is not the authority.** *"checkpatch.pl… is not smarter than you.
+  If fixing a checkpatch.pl complaint would make the code worse, don't do it."*
+  Run it, address it, and say why when you do not — the counterpart to the
+  [false positives seen on this hardware](#checkpatch-false-positives-seen-on-this-hardware).
+
+**After posting — the half that is not optional.**
+
+- **The question behind most review comments** is *"what will it be like to
+  maintain a kernel with this code in it five or ten years later?"* — which is why
+  the answer to "why must my clever hack become a generic feature" is: because
+  somebody will maintain it after both of you.
+- ☠️ **Ignoring comments does not make them go away.** *"If you repost code without
+  having responded to the comments you got the time before, you're likely to find
+  that your patches go nowhere."* This is the in-tree statement of the
+  [dropped-from-Patchwork](#conduct-on-the-list--the-ways-a-series-dies-with-no-technical-objection)
+  behaviour observed on the qcom lists.
+- ☠️ **Andrew Morton's rule:** *"every review comment which does not result in a
+  code change should result in an additional code comment instead"* — a question a
+  reviewer had is a question the next reader will have. This is the cheapest way a
+  review round leaves something permanent behind.
+- **Re-state, in the changelog, what was raised last time and how you handled it.**
+  *"Reviewers should not have to search through list archives to familiarize
+  themselves with what was said last time."* So the below-`---` changelog is not a
+  list of diffs; it is an answer sheet.
+- **Disagreeing is allowed, digging in is not.** Explain and justify; *"Should your
+  explanation not prove persuasive, though, especially if others start to agree
+  with the reviewer, take some time to think things over again."* And when a review
+  reads as angry, answer the technical content and nothing else.
+- **Expect a second wave.** Entering a subsystem tree and then linux-next puts the
+  series in front of new reviewers and surfaces conflicts with other people's work;
+  that round is normal, not a setback. And merging is not the end — a new driver
+  means a MAINTAINERS entry and the regressions that follow.
+
+---
+
 ## Before sending: re-check the draft against the latest verdicts
 
 ☠️ **A claim in a draft can be internally inconsistent with a table in the same
@@ -1960,6 +2056,14 @@ work — so a self-review that stops at "sparse is clean" is half done.
       exists.
 - [ ] **Subject lines visually match the subsystem's own** —
       `git log --oneline -20 -- <file>` before naming the patch.
+- [ ] **Every patch builds *and boots* on its own**, and no patch adds
+      infrastructure that stays unused until a later one.
+- [ ] **The series was mailed to yourself first** and `git am`-ed back intact.
+- [ ] **`Link:` adds something the commit does not**; a public bug report uses
+      `Closes:`; no private tracker URL and no link that was not fetched.
+- [ ] **The changelog answers the previous round** — what was raised, how it was
+      handled — and every comment that produced no code change produced a code
+      comment instead.
 - [ ] **`dt_binding_check` was run with an up-to-date dtschema**
       (`pip3 install dtschema --upgrade`), the `$id` matches the file's path and
       name, and the example compiles with every `required:` property present.
@@ -2053,6 +2157,13 @@ guides. When in doubt, these are the ground truth:
 **The authoritative in-tree docs (mandatory reading before v1)**
 - Submitting patches — the essential guide:
   <https://docs.kernel.org/process/submitting-patches.html>
+- The *development-process* series — the kernel's own end-to-end upstreaming
+  guide; parts 5 and 6 are distilled above:
+  <https://docs.kernel.org/process/development-process.html>,
+  <https://docs.kernel.org/process/5.Posting.html>,
+  <https://docs.kernel.org/process/6.Followthrough.html>
+- Email clients that do not corrupt patches:
+  <https://docs.kernel.org/process/email-clients.html>
 - Submit checklist: <https://docs.kernel.org/process/submit-checklist.html>
 - DT binding submission:
   <https://docs.kernel.org/devicetree/bindings/submitting-patches.html>
