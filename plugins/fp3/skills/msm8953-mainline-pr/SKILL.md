@@ -764,6 +764,58 @@ a few hours' work, and it takes the series from "nearly clean" to clean. Worked
   when it documents properties three later patches introduce — splitting a
   binding across patches is unusual and reads worse.
 
+### Form rules a reviewer will spend a whole revision on
+
+Harvested 2026-08-29 from recent qcom/DT series that needed a v2/v3 purely for
+form. None of these are judgement calls; each cost somebody a round trip.
+
+**The binding file.**
+
+- **The filename is the compatible.** `qcom,<soc>-<block>.yaml`, matching the
+  compatible it documents — not a generic subsystem name. And ☠️ **do not rename
+  an existing binding** while adding a compatible to it: *"Please do not rename the
+  binding. Old name was correct."*
+- **The subject is `dt-bindings: <subsystem>: Add <device>`.** No trailing word
+  "binding" (the prefix already says it), and it **names hardware, not a driver** —
+  a subject about a "platform driver" or an init mode is itself a review comment.
+- **Copy the pattern from the neighbouring bindings before inventing one.** The
+  recurring form of this comment is *"I asked to open other bindings to see how this
+  is done"* — e.g. a `clocks` list with several possible lengths needs `minItems`,
+  which every sibling binding in that directory already shows. Read two siblings in
+  the same directory before writing; this is the cheap half of
+  [prior art](#look-for-prior-art-before-writing-not-after).
+- **Every statement in the binding is checkable against the datasheet.** *"This is
+  not true. Please open datasheet - it clearly says SPI interface"* — a description
+  sentence is a claim like any other.
+- **Add to the shared binding, don't grow a private example.** Where a property is
+  already valid for the other devices in a file, add it there and drop the extra
+  example you were about to paste.
+
+**The DTS node.**
+
+- ☠️ **GPIO polarity states the logical level, even when the in-tree driver has it
+  backwards.** Reviewing an FP5 NFC node with `reset-gpios = <&tlmm 38
+  GPIO_ACTIVE_HIGH>`, Krzysztof Kozlowski, 2026-08-27: *"This must be ACTIVE_LOW and
+  existing driver is just wrong. Driver should handle old DTS without change, but
+  for the new device correct it to proper way of handling logical state of GPIO pin
+  (reset as "1" means asserted, so device is not working)."*
+  (<https://lore.kernel.org/all/20260827-strange-sensible-duck-40cfa3@quoll/>)
+  So: read the flag as *what the pin means*, not as *what makes the current driver
+  work* — and when the two disagree, the new DTS is right and the driver gets fixed
+  to keep old DTBs working. Copying the polarity out of a downstream DTS reproduces
+  the downstream bug.
+- **`interrupts-extended`**, not `interrupt-parent` + `interrupts` as two
+  properties.
+- **Pin *levels* are not pinctrl state.** `output-high` in a reset pinmux node is
+  the driver's job (`gpiod_set_value`), not the pin controller's; pinctrl carries
+  mux, pull and drive strength.
+- **Generic node names.** `fuel-gauge@55`, `nfc@8`, `touchscreen@…` — the class of
+  device, per the DT spec, never the part number (`bq27541-battery@55`). The part
+  number is what `compatible` is for.
+- **One addition to the shared DTSI beats three identical additions to board DTS
+  files** when every board that includes it has the part. A hypothetical future
+  board that might not is not an argument.
+
 Trailing whitespace / space-before-tab in a reverse-engineered register table
 *are* real (checkpatch ERRORs) — strip them (`sed -i 's/[ \t]*$//' ; sed -i
 's/ \+\t/\t/g'`), plus `MODULE_LICENSE("GPL v2")`→`"GPL"`.
@@ -1451,6 +1503,78 @@ site is **plain HTTP with no TLS**; a fetcher that upgrades to `https://` gets
   [Revision mechanics](#self-review-read-the-diff-not-just-the-series): carry
   every `Reviewed-by:`/`Tested-by:` forward.
 
+**How a series gets dropped without a NAK.** On the qcom/DT lists the quiet
+failure has an explicit form: the maintainer replies *"Dropping from Patchwork"*
+and the series leaves the queue. Harvested 2026-08-29, the reasons that actually
+produced that sentence in recent months — each one is a rule stated elsewhere in
+this skill, here in the form it fails in:
+
+- **An incomplete recipient set.** *"You missed at least devicetree list (maybe
+  more), so this won't be tested by automated tooling. Performing review on
+  untested code might be a waste of time."* The point is not etiquette: the DT
+  list is where the automated checkers and review bots subscribe, so a missing
+  list means nothing machine-readable ever ran. `get_maintainer.pl` on the
+  *generated patch files* is the fix, and asserting you ran it is not a
+  substitute for the result — a submitter who claimed it and still missed the
+  list got *"Still not. I do not believe you did it."*
+- **An unanswered review comment — including a bot's.** Krzysztof Kozlowski,
+  2026-08-27: *"Sashiko comment was not answered and looks reasonable, dropping
+  from Patchwork."*
+  (<https://lore.kernel.org/all/20260827-tiger-of-sublime-flowers-eb8f90@quoll/>)
+  Every comment on the thread gets an answer in the next version or a reply
+  saying why not — **including one written by another AI**, which is worth
+  internalising in both directions: an agent's review is treated as review here.
+- **A tag silently ignored between versions.** *"So you just ignored the tag?
+  Sure, we can ignore patches as well. Dropping from patchwork."* (2026-07-07,
+  <https://lore.kernel.org/all/8e9a2c05-178b-4360-b814-660d049e50a3@kernel.org/>)
+- ☠️ **Interdependent changes split across separate submissions.** Konrad Dybcio,
+  on a `Depends-on: <lore URL>` line in a commit message: *"This is not a valid
+  tag to put in the commit message. / Why haven't you sent the two clearly
+  interdependent patches together?"* — and when the submitter defended the split,
+  *"You have been already told TWICE and you keep arguing."*
+  (<https://lore.kernel.org/all/c4bf7a4b-48a9-4bfb-b133-858189627639@kernel.org/>)
+  Note precisely what this does **not** contradict:
+  [a posted prerequisite](#a-dependency-that-was-posted-is-a-citable-prerequisite-not-a-blocker)
+  is *somebody else's* patch, cited through `b4`'s `prerequisite-patch-id:`
+  machinery below the `---`. Two halves of **your own** change — the driver and
+  the DTS that needs it, the SPI node and the device on it — are one series with
+  a cover letter, never two submissions pointing at each other. "Different
+  internal ownership" is not a reason a list accepts.
+
+☠️ **The `Assisted-by:` trailer is read, and it raises the bar rather than
+lowering it.** Two 2026 threads that the authorship rules above do not by
+themselves predict:
+
+- On a **one-line** binding patch carrying `Assisted-by: Claude:claude-opus-4-6`,
+  Dmitry Baryshkov: *"Claude assisting to write a one-liner patch? It's becoming
+  ridiculous."*, then Krzysztof Kozlowski: *"If a human cannot write and validate
+  this one, I see as putting effort on maintainers. Dropping from patchwork."*
+  (2026-05-30,
+  <https://lore.kernel.org/all/20260530-wise-discreet-woodpecker-3c7d0c@quoll/>)
+- To a submitter whose defence of a review comment read to the maintainer as
+  model output: *"Do not paste us LLM answers, I find it disrespectful in regard
+  to my time."* (2026-08-25, same shikra thread as above.)
+
+Three duties follow, and they are the price of this door being open at all:
+
+1. **Disclose accurately, and never drop the trailer to avoid the reaction.**
+   Removing a true `Assisted-by:` because it draws fire is falsifying the
+   disclosure — [Factual integrity](#factual-integrity--overrides-everything-below)
+   forbids it, and `generated-content.rst` is what makes the disclosure the
+   condition of acceptance. The correct response to "why did this need an AI" is
+   never to hide the answer.
+2. **Send fewer, larger, load-bearing patches.** The trailer on a trivial
+   one-liner is what triggered the objection; the same trailer on a series that
+   carries real measurement is unremarkable. If a change is small enough that the
+   disclosure looks absurd, fold it into the series it belongs to rather than
+   sending it alone.
+3. **Every word you send is yours.** A reply drafted by a model and pasted into a
+   thread is the single response most likely to end the conversation — read it,
+   cut it to what a person would write, and make sure it answers the question that
+   was asked rather than restating the patch. The maintainer in that thread had
+   already made the same point twice; the model prose was what turned a technical
+   disagreement into a personal one.
+
 **The substance behind the form.**
 
 - ☠️ **Do not build a special case for one consumer.** Part 4's rejected patch put
@@ -1562,6 +1686,22 @@ tell you to expect:
 - **The message says *why*, imperative mood** ("fix", not "fixed" / "this patch
   fixes"), and any commit it names is `<12-hex> ("subject")` from `git rev-parse`.
 
+**Three more that recent driver reviews kept finding** (same 2026-08-29 harvest):
+
+- **Publish last.** Do not register the device, chardev or class interface before
+  its state is fully initialised — the window between "visible" and "ready" is a
+  real race, and it is what a review bot found in an NFC probe that registered the
+  NCI device before the mode field it depends on was set.
+- **Power sequencing is part of probe, not a detail.** A reset line driven before
+  its supply is enabled is a bug even when the device happens to come up; assert
+  reset *after* the regulator, and say in the commit which order the datasheet
+  gives.
+- **Use the kernel's accessors.** `get_unaligned_le32()` and friends instead of
+  hand-rolled shift-and-or, `FIELD_GET()`/`FIELD_PREP()` for register fields —
+  reviewers ask for these by name, and they are the same rule as "types describe
+  the hardware". And nothing sleeps in an IRQ handler: `usleep_range()` reachable
+  from a hardirq means the work belongs in a threaded handler.
+
 **Revision mechanics**, once a v1 has been reviewed (from
 [kernelnewbies PatchTipsAndTricks](https://kernelnewbies.org/PatchTipsAndTricks)):
 never hand-edit a generated patch's body or its subject beyond the `[PATCH vN]`
@@ -1603,6 +1743,30 @@ work — so a self-review that stops at "sparse is clean" is half done.
 - [ ] Rebased across the base bump; **rebuilt + CONFIG-checked + `fp3-selftest` green.**
 - [ ] `scripts/checkpatch.pl --strict` clean; `scripts/get_maintainer.pl` used for
       the recipient set.
+- [ ] **The recipient set actually contains the DT list and the subsystem list** —
+      checked in the generated `To:`/`Cc:`, not asserted. Missing lists mean no
+      automated tooling runs, which is a documented reason for a series to be
+      dropped rather than reviewed.
+- [ ] **Every comment on the previous version was answered** in the changelog or
+      in a reply — including comments from a review bot — and no tag given earlier
+      was silently dropped.
+- [ ] **Interdependent changes are in one series**, not two submissions citing each
+      other; `Depends-on:` is not a kernel tag. A *foreign* posted prerequisite is
+      cited with `b4`'s `prerequisite-patch-id:` instead.
+- [ ] **Nothing pasted from a model into the thread.** The `Assisted-by:` trailer
+      stays (removing a true disclosure is falsifying it), but every reply on the
+      list is written and checked by the human sending it, and trivial one-liners
+      are folded into the series they belong to rather than sent alone
+      (see [How a series gets dropped](#conduct-on-the-list--the-ways-a-series-dies-with-no-technical-objection)).
+- [ ] **Binding form**: filename matches the compatible, existing binding not
+      renamed, subject is `dt-bindings: <subsystem>: Add <device>` naming hardware
+      rather than a driver, and two sibling bindings in the same directory were
+      read for the established pattern (`minItems` and friends).
+- [ ] **DTS form**: GPIO flags state the logical level (`GPIO_ACTIVE_LOW` for an
+      active-low reset, even if an in-tree driver has it backwards),
+      `interrupts-extended` rather than `interrupt-parent` + `interrupts`, no pin
+      *levels* in a pinctrl state, generic node names (`fuel-gauge@`, not the part
+      number).
 - [ ] **The checker gauntlet was run and named**: `make W=1` over the touched files
       adds no warning, `sparse` (`make C=2`) is clean, `coccicheck` run — and the
       cover letter says which ran (see [Self-review](#self-review-read-the-diff-not-just-the-series)).
