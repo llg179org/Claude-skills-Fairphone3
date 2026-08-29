@@ -1317,6 +1317,32 @@ carefully to work out whether your part is inside or outside it.
   settings); **mer-hybris/hadk-faq** + HADK PDF (hybris rules).
 - **Lean on community repos; record provenance in `references/archive/sailfish-components.md`** so the port
   stays reproducible and shareable.
+- **The pmOS mainlining wiki set** — `Mainlining` (the general page), plus the
+  per-SoC ones (`MSM8916_Mainlining` is the most detailed and the closest in shape
+  to an MSM8953 bring-up; `MSM8996_Mainlining`, `SDM845_Mainlining`). Read them for
+  *bring-up order* — initial DTS, simplefb for first output, UART pads, ramdisk +
+  boot image, remoteprocs — not for their feature matrices, which are dated status.
+  ☠️ **Reach method:** the whole wiki sits behind an **Anubis** bot wall that
+  answers **HTTP 200 with a ~7 kB "Making sure you're not a bot!" page for every
+  URL**, `?action=raw` and `api.php` included — so `curl` "succeeds" and you get a
+  challenge page whose size is identical for every article. A `wc -c` around 7.5 kB,
+  or four downloads of the same byte count, *is* the failure signal. Save from a
+  browser (Printable version → print to PDF) and read it with `pdftotext -layout`.
+- **Durable background material** (the pmOS `Mainlining` page's reading list, kept
+  because these age slowly — talks and slides, not status):
+  *ARM64 SoC Linux Support Check-List* (Bootlin/Clément, slides — a step-by-step of
+  what a new SoC needs), *Device Tree for Dummies* (Petazzoni, slides),
+  *DTS 101: From Roots To Trees* (Kozlowski), the
+  [Devicetree Specification](https://www.devicetree.org/specifications/) and
+  [Device Tree Usage](https://elinux.org/Device_Tree_Usage), *Porting mainline Linux
+  to mobile phones* (Luca Weiss, FOSDEM 2022 — the Fairphone-shaped version of this
+  whole problem), *From Android to mainline on the Snapdragon 845* (Casey Connolly,
+  FOSDEM 2022), *How the ARM32 kernel starts* (Linus Walleij),
+  <https://mainlining.dev/>, and for the subsystems this port keeps touching:
+  *Pin Control and GPIO* (Walleij), *What The Clock! — Linux Clock Subsystem
+  Internals*, *PMICs: Keep the Power in Your Hands* (Bootlin), *How Dealing with
+  Modern Interrupt Architectures can Affect Your Sanity* (Zyngier), and Laurent
+  Pinchart's *How V4L2 Transformed To Support Embedded Cameras*.
 - **The q6afe / APR audio-clock path** — the upstream `apq8016_sbc` **msm8953/msm8976** ASoC series
   (on `mail-archive.com` / `lore`; the `q6afe` MI2S-sysclk series is `v5/v6 12/24`) documents that the
   SoC's key differentiator is the **Q6AFE CLK API version** (msm8953 = V2, `Q6AFE_LPASS_CLK_ID_*` via
