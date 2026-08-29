@@ -1298,6 +1298,94 @@ GitHub-flow conveniences any more.
 
 ---
 
+## Conduct on the list — the ways a series dies with no technical objection
+
+Everything above shapes the patches. This section is about the other half: mail
+form, routing, timing and how you answer a review. A technically correct series
+loses to any of them. Source: Greg Kroah-Hartman, *How to (not) piss off a kernel
+subsystem maintainer*, parts 1–6, 2005-03-31 … 2011-08-08 —
+<http://kroah.com/log/linux/maintainer.html> plus `maintainer-02` … `-06`. (That
+site is **plain HTTP with no TLS**; a fetcher that upgrades to `https://` gets
+`ECONNREFUSED`, so read it with `curl http://…`.)
+
+**Mail form — the ways a patch never reaches a human.**
+
+- **Inline plain text only.** Not an attachment, not base64, and ☠️ **never
+  HTML** — `vger.kernel.org` filters HTML mail, so the list never sees it and the
+  maintainer is the only recipient. That is part 6's second failure, and it is
+  invisible from the sender's side: the mail "went out" and nobody replied.
+  `git send-email` gets this right; a mail client usually does not.
+- **The diff is offset to the root of the kernel tree** (`-p1`, what
+  `git format-patch` emits). Anything else is hand work for the reader.
+- ☠️ **Send the patches, not a pointer to a tree.** A "please review" whose
+  content is a link to a git/forge branch is not a submission — the review happens
+  in the mail thread, on the text of the patch.
+- **One patch per mail, each with its own subject and its own description.** Not
+  one 300 KB mail carrying five patches (part 3), and not thirteen mails sharing a
+  single subject line and no body (part 5). Volume is a courtesy question too: a
+  hundred-patch drop lands on a person.
+
+**Routing and timing.**
+
+- ☠️ **Never route around a maintainer.** Sending the same work to a *different*
+  subsystem maintainer to get it merged through another tree is the one item on
+  Greg's list that ends a relationship rather than a thread (part 2) — and it
+  counts even when the submitter did not realise that was what they were doing.
+  Note that the DTS-vs-driver routing rule above is not an exception to this: a
+  binding travelling with the driver tree and a `.dts` with the SoC tree is
+  *where each file belongs*, not a choice of whom to ask. Build the recipient set
+  with `get_maintainer.pl`, Cc the subsystem list, and Cc the proper subsystem
+  maintainer even when the patch touches a file another tree carries (part 4's
+  patch failed on exactly that).
+- ☠️ **The merge window is not review time.** Patches sent while it is open wait
+  until it closes; sending them then and asking, hours after it reopens, why 117
+  patches have not been applied is precisely part 6. Give weeks, not days; ping
+  at most once, on-list, in-thread.
+
+**Answering a review.**
+
+- ☠️ **Answer on the list.** Replying privately to a question asked publicly hides
+  the answer from everyone else and, to the list, looks like no answer at all
+  (part 3). Reply-all, quote, trim.
+- ☠️ **"Why is it done this way?" is a question, not an attack — and every line in
+  the series needs an answer.** This is the item with a specific AI failure mode,
+  and [Factual integrity](#factual-integrity--overrides-everything-below) governs
+  it: never answer with an invented rationale, and never attribute a line to a
+  person, tree or datasheet you have not checked. Part 5 records a submitter who,
+  asked why a hunk was written that way, *blamed a non-existent person* — the
+  organic form of a hallucinated citation. "I do not know; it was imported from X
+  (`Link:`), and I will find out" is an acceptable answer. A fabricated one is not
+  survivable.
+- **Act on the correction.** Re-sending in v2 the form a reviewer already
+  rejected — style comments ignored, the split not done — is part 1's second item
+  and reads as contempt. The counterpart duty is
+  [Revision mechanics](#self-review-read-the-diff-not-just-the-series): carry
+  every `Reviewed-by:`/`Tested-by:` forward.
+
+**The substance behind the form.**
+
+- ☠️ **Do not build a special case for one consumer.** Part 4's rejected patch put
+  a procfs-shaped API on top of sysfs, and only for one user. A facility only this
+  board or this userspace can use is the wrong shape: generalise it, or do not add
+  it. The same post's positive half is worth keeping — *posting real code to raise
+  a real design question is the best way to work*, so the rejection was of the
+  shape, not of the asking.
+- ☠️ **A long-lived out-of-tree fork is unreviewed code, and it shows.** Greg's
+  standing diagnosis of the Xen submissions applies literally to this port: work
+  that has lived on its own branch for years has never met an outside reviewer, so
+  the first series attracts structural comments, not typo comments. Expect that
+  and read it as review, not rejection.
+- **The patch does what its description says, and only that.** One logical change;
+  a description of *this* patch rather than of the series or of an earlier
+  version; no feature riding inside a "fix"; no new style issues inside a style
+  cleanup. Same rules as §"Reduce the number of commits per task" and the
+  imperative-mood rule — stated here as the failure modes part 5 actually
+  received.
+- **It was built, and it was run.** Most of part 5's list is patches that had
+  never been compiled, or compiled but never executed — including one that did the
+  opposite of what its author wanted. Building every intermediate commit and a
+  green `fp3-selftest` on the rebased series are what stand in for "run it" here.
+
 ## Before sending: re-check the draft against the latest verdicts
 
 ☠️ **A claim in a draft can be internally inconsistent with a table in the same
@@ -1463,6 +1551,21 @@ work — so a self-review that stops at "sparse is clean" is half done.
 - [ ] **`Fixes:` taken from `git blame` on the real tree**, not from the file's age.
 - [ ] Commits are `-s` signed, imperative-mood, body wrapped ~75 cols; `Fixes:`/`Cc:
       stable` on bugfixes.
+- [ ] **The mail itself is submittable**: sent with `git send-email`, inline plain
+      text — no attachment, no base64, **no HTML** (vger filters it silently, so the
+      list never sees the series); the diff is `-p1`, rooted at the kernel tree; one
+      patch per mail, each with its own subject and description; a link to a branch
+      is never a substitute for the patches.
+- [ ] **Routing is right and nobody was gone around**: recipients from
+      `get_maintainer.pl`, subsystem list Cc'd, the proper subsystem maintainer Cc'd
+      even when another tree carries the file — and the series was not re-sent to a
+      different maintainer to get it in another way.
+- [ ] **Not sent into an open merge window**; any ping waits weeks, is on-list and
+      in-thread (see [Conduct on the list](#conduct-on-the-list--the-ways-a-series-dies-with-no-technical-objection)).
+- [ ] **Every review answer goes to the list, and every "why is this so?" has a
+      checked answer** — no invented rationale, no attribution to a person, tree or
+      datasheet that was not verified; "imported from X, I will find out" beats a
+      fabrication.
 - [ ] **Any oops/trace in a commit message is trimmed** per
       `submitting-patches.rst` §Backtraces — no timestamps, module lists,
       register/stack dumps or generic syscall tail — and the oops *header* (the
@@ -1535,6 +1638,16 @@ guides. When in doubt, these are the ground truth:
   comments to expect: <https://kernelnewbies.org/PatchTipsAndTricks>
 - Andi Kleen, *On submitting kernel patches* (a classic catalogue of the comments
   reviewers give): <https://halobates.de/on-submitting-patches.pdf>
+- Greg Kroah-Hartman, *How to (not) piss off a kernel subsystem maintainer*,
+  parts 1–6 — the list-conduct failures distilled in
+  [Conduct on the list](#conduct-on-the-list--the-ways-a-series-dies-with-no-technical-objection):
+  <http://kroah.com/log/linux/maintainer.html>,
+  [-02](http://kroah.com/log/linux/maintainer-02.html),
+  [-03](http://kroah.com/log/linux/maintainer-03.html),
+  [-04](http://kroah.com/log/linux/maintainer-04.html),
+  [-05](http://kroah.com/log/linux/maintainer-05.html),
+  [-06](http://kroah.com/log/linux/maintainer-06.html).
+  ☠️ Plain HTTP only — an `https://` upgrade answers `ECONNREFUSED`.
 
 ## Feeding the method back
 
