@@ -768,6 +768,20 @@ a few hours' work, and it takes the series from "nearly clean" to clean. Worked
   example DTS — all four are found by running it yourself. The mechanics, the differential discipline and the
   silent-skip trap are in
   [`../fp3-kernel-test/references/safety.md`](../fp3-kernel-test/references/safety.md).
+- ☠️ **A legacy `.txt` binding is converted to YAML before it gains properties.**
+  Krzysztof Kozlowski, 2023-12-18: *"You add six new properties, so from my point
+  of view this cannot be in TXT."*
+  (<https://lore.kernel.org/all/fae1e6f8-f679-4266-95b6-5879c71683a4@linaro.org/>)
+  Budget the conversion as its own patch at the head of the series; discovering
+  this at v2 costs a whole round.
+- **A compatible names one SoC even when one driver serves the family** — same
+  message: *"Compatible should be specific to one SoC, even if there is one driver
+  for entire family."* The fallback compatible expresses the family; the specific
+  one is still required.
+- **The binding's enums and the driver's tables are one fact in two files.** When
+  a driver's function or pin list is consolidated, the YAML `enum` is updated in
+  the same series — *"you consolidated the functions in the driver, but you forgot
+  to update this list accordingly"* is a v2 that existed only for that.
 - **Where a binding patch goes in the series:** its own commit, before the driver
   patch that adds the compatible. One binding patch for the whole series, even
   when it documents properties three later patches introduce — splitting a
@@ -1473,6 +1487,11 @@ site is **plain HTTP with no TLS**; a fetcher that upgrades to `https://` gets
   `git send-email` gets this right; a mail client usually does not.
 - **The diff is offset to the root of the kernel tree** (`-p1`, what
   `git format-patch` emits). Anything else is hand work for the reader.
+- **Wrap your prose too.** Mark Brown, to a submitter whose replies arrived as
+  single long lines: *"Please fix your mail client to word wrap within paragraphs
+  at something substantially less than 80 columns. Doing this makes your messages
+  much easier to read and reply to."* This applies to the discussion, not just the
+  patch — and quote-trimming is the same courtesy.
 - ☠️ **Send the patches, not a pointer to a tree.** A "please review" whose
   content is a link to a git/forge branch is not a submission — the review happens
   in the mail thread, on the text of the patch.
@@ -1605,6 +1624,10 @@ Three duties follow, and they are the price of this door being open at all:
 
 **The substance behind the form.**
 
+- ☠️ **A generic IP block does not get an SoC-specific driver.** *"If this is a
+  Cadence IP why is the entire driver SoC specific?"* If the block is licensed IP
+  that several vendors ship, the driver belongs under the IP vendor with a
+  fallback compatible, and only the integration differences are SoC-specific.
 - ☠️ **Do not build a special case for one consumer.** Part 4's rejected patch put
   a procfs-shaped API on top of sysfs, and only for one user. A facility only this
   board or this userspace can use is the wrong shape: generalise it, or do not add
@@ -1724,6 +1747,12 @@ tell you to expect:
   its supply is enabled is a bug even when the device happens to come up; assert
   reset *after* the regulator, and say in the commit which order the datasheet
   gives.
+- **House style in a reverse-engineered register table.** Hex constants
+  **lowercase** (*"Please use lowercase for hex constants."*), no parentheses
+  around a plain value, no initialiser on a variable that is assigned before use,
+  and `clamp()` rather than a hand-rolled min/max ladder — reviewers of sensor and
+  codec drivers ask for all four by name, and a table imported from a vendor tree
+  arrives violating them.
 - **Use the kernel's accessors.** `get_unaligned_le32()` and friends instead of
   hand-rolled shift-and-or, `FIELD_GET()`/`FIELD_PREP()` for register fields —
   reviewers ask for these by name, and they are the same rule as "types describe
@@ -1756,6 +1785,23 @@ document before writing, not after the comment arrives:
   this driver ignore writes before hw_init is set, should this one?"* — because a
   driver that answers a write differently in two places is the inconsistency the
   reviewer reads first.
+- **A mixer control's `put()` reports change, not success.** Return 1 only when
+  the written value differs from what was there, 0 when it does not: *"This will
+  also unconditionally report that the value of the mux changed, the function
+  should return 0 if the value written is the control value hasn't changed"*.
+  Userspace event delivery hangs off that return.
+- ☠️ **regmap: a volatile register is marked volatile, and never given a
+  default.** Mark Brown on a WCD939x codec driver, 2023-12-13: *"There's a bunch
+  of registers like this which look like they should be volatile and are actually
+  volatile which makes supplying defaults rather strange - in general volatile
+  registers shouldn't have defaults."*
+  (<https://lore.kernel.org/all/e8b5099c-ceb2-4605-94bc-efd09ad55cb7@sirena.org.uk/>)
+  The rule to carry: in a cached regmap, **status, interrupt and any
+  hardware-updated register must be in `volatile_reg`**, or a read is answered
+  from the cache and a write of the cached value is dropped entirely. That is not
+  only a review comment — it is a whole class of "the driver polls a bit that
+  never changes" bug, and the instrument that would catch it must not be the same
+  regmap.
 - **Everywhere.** Before adding a control, a property or a sysfs value, grep the
   subsystem for the same concept under its established name. The generic version
   of every bullet above is: the interface is the subsystem's, not this driver's.
@@ -1855,6 +1901,15 @@ work — so a self-review that stops at "sparse is clean" is half done.
 - [ ] **The subsystem's own units and idioms were read**: power-supply in
       µV/µA/µAh/tenths of °C, `pm_runtime_resume_and_get()` rather than
       `pm_runtime_get_sync()`, an ASoC on/off control as a Switch not an enum.
+- [ ] **regmap describes the hardware**: every status/interrupt/hardware-updated
+      register is in `volatile_reg` and carries no default, and a mixer `put()`
+      returns 1 only when the value actually changed.
+- [ ] **No properties were added to a legacy `.txt` binding** — it is converted to
+      YAML first, as its own patch — and each new compatible names one SoC even
+      where a single driver serves the family.
+- [ ] **Imported register tables were brought to house style**: lowercase hex, no
+      stray parentheses, no needless initialisers, `clamp()` instead of a min/max
+      ladder.
 - [ ] **`dt_binding_check` was run with an up-to-date dtschema**
       (`pip3 install dtschema --upgrade`), the `$id` matches the file's path and
       name, and the example compiles with every `required:` property present.
