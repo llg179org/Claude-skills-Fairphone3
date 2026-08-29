@@ -274,6 +274,21 @@ which caused the problem, even though the real bug is elsewhere."*
 
 Two rules, and the first one is structural:
 
+☠️ **First, decide whether the code may be imported at all — "downstream" is not
+one category.** Code from another *mainline-oriented* tree (a fork like
+`msm8953-mainline`, a posted-but-unmerged series, another device's driver) is
+importable, and the rules below say how to attribute it. **Vendor/Android
+downstream code is not**, and the postmarketOS mainlining guide states the
+consequence plainly: *"Do not attempt to copy any code as-is from downstream. In
+general this won't work, and most importantly: it won't be accepted for inclusion
+into the mainline kernel upstream. Instead, try to understand what the downstream
+code does, and rewrite it from scratch for mainline by looking at similar code."*
+So a vendor tree is evidence — register sequences, magic values, which pin does
+what — and its *findings* are citable
+([provenance](#2b-split-the-import-from-the-invention-and-make-the-import-traceable)
+covers how). Its *code* is not a source you copy from, and a patch that reads like
+BSP code will be sent back regardless of how well it is attributed.
+
 **Never mix imported code and new work in one commit.** If a patch carries
 somebody else's code *and* your addition to it, the reviewer cannot see which is
 which, `git blame` credits you for their lines, and a revert takes out both. So:
@@ -2119,6 +2134,17 @@ guides. When in doubt, these are the ground truth:
   <https://docs.postmarketos.org/policies-and-processes/development/ai-policy.html>
 - msm8953-mainline maintainer statement, 2026-07-25:
   <https://github.com/msm8953-mainline/linux/issues/197>
+
+**Device-porting guides (the phone-shaped end of the process)**
+- postmarketOS *Mainlining* — the "do not copy downstream as-is" rule above, plus
+  the tree-choice and getting-started steps:
+  <https://wiki.postmarketos.org/wiki/Mainlining> ☠️ behind an Anubis bot wall:
+  `curl` gets a 7 kB "Making sure you're not a bot!" page with HTTP 200 on every
+  URL including `?action=raw`, so it has to be saved from a browser. Its SoC
+  feature matrix is exactly the kind of status this skill must not copy.
+- postmarketOS *Submitting Patches* (the Linux section is its upstream overview):
+  <https://wiki.postmarketos.org/wiki/Submitting_Patches>
+- `git send-email` tutorial: <https://git-send-email.io/>
 
 **First-patch tutorials (informal but complete)**
 - <https://opensource.com/article/18/8/first-linux-kernel-patch>
