@@ -768,6 +768,14 @@ a few hours' work, and it takes the series from "nearly clean" to clean. Worked
   example DTS — all four are found by running it yourself. The mechanics, the differential discipline and the
   silent-skip trap are in
   [`../fp3-kernel-test/references/safety.md`](../fp3-kernel-test/references/safety.md).
+- **Property names use hyphens, never underscores** — *"Don't use '_' in property
+  names."* (Rob Herring; it is also a `W=2` dtc warning, so it is machine-findable
+  before a human sees it.)
+- **Use the standard property when one exists**, and justify a vendor property
+  when it does not: *"what's the type? Does the standard 'wakeup-source' property
+  not work here?"* Every vendor property needs an explicit type — a `$ref` into
+  `types.yaml` — and pattern-matched subnodes need a `$ref` to the common schema
+  for their class (e.g. `pinmux-node.yaml`) rather than a hand-written copy.
 - ☠️ **A legacy `.txt` binding is converted to YAML before it gains properties.**
   Krzysztof Kozlowski, 2023-12-18: *"You add six new properties, so from my point
   of view this cannot be in TXT."*
@@ -1450,6 +1458,14 @@ GitHub-flow conveniences any more.
   (`Documentation/devicetree/bindings/…`) travels with the **driver** subsystem
   tree; the board **`.dts`** goes via the **SoC/qcom** tree. Same "don't mix"
   discipline, but know which of the two a given file is.
+- **The subject line copies the subsystem's own style.** Mark Brown, repeatedly:
+  *"Please submit patches using subject lines reflecting the style for the
+  subsystem, this makes it easier for people to identify relevant patches. Look at
+  what existing commits in the area you're changing are doing and make sure your
+  subject lines visually resemble what they're doing."* The command is
+  `git log --oneline -20 -- <the file you are touching>`; copy the prefix shape you
+  see there rather than inventing one. (He adds *"There's no need to resubmit to
+  fix this alone"* — fix it in the next version.)
 - **`scripts/checkpatch.pl --strict`** clean; **`scripts/get_maintainer.pl`** on
   the generated patch file to build the recipient set:
   ```sh
@@ -1727,7 +1743,13 @@ tell you to expect:
 
 - **Locking.** Every lock is dropped on *every* path, the error ones included; no
   sleep under a spinlock (`CONFIG_DEBUG_ATOMIC_SLEEP` proves it on the device);
-  the lock actually covers the data it is claimed to.
+  the lock actually covers the data it is claimed to. ☠️ **An atomic variable is
+  not a substitute for one**: *"either there's a lock missing … or there's no need
+  for the use of atomics"* — if a sequence of operations must not interleave, an
+  `atomic_t` on one of them proves nothing, and if nothing can interleave, the
+  atomic is noise. And a missing barrier between "the device is visible" and "the
+  device is ready" is a synchronisation bug to fix in the init order, not to paper
+  over with a retry or a delay.
 - **Error paths free what the success path took.** `devm_*` where it fits, matched
   `goto` unwinding where it does not. A leak on a failure path is the single most
   common thing a driver review flags.
@@ -1802,6 +1824,16 @@ document before writing, not after the comment arrives:
   only a review comment — it is a whole class of "the driver polls a bit that
   never changes" bug, and the instrument that would catch it must not be the same
   regmap.
+- **V4L2 sensors: link frequency is a control, and a read-only one.** A sensor
+  exposing `V4L2_CID_PIXEL_RATE` without `V4L2_CID_LINK_FREQ` draws the question
+  every time — *"What about the link frequency? Is this value constant for the
+  sensor? Or should there be a list of hardware supported link frequencies?"* —
+  and the frequency list belongs to the board (DT `link-frequencies`), so the
+  control is flagged `V4L2_CTRL_FLAG_READ_ONLY` after the handler is initialised.
+  A hard-coded external clock rate gets the same question.
+- **One pair of power functions, not two.** *"There's really no need for two pairs
+  of functions doing the same things"* — the runtime-PM callbacks *are* the
+  power-on/power-off path; do not keep a parallel pair beside them.
 - **Everywhere.** Before adding a control, a property or a sysfs value, grep the
   subsystem for the same concept under its established name. The generic version
   of every bullet above is: the interface is the subsystem's, not this driver's.
@@ -1819,6 +1851,18 @@ meaning anything if senders infer them. This is a fabrication risk in exactly th
 shape [Factual integrity](#factual-integrity--overrides-everything-below)
 describes: a plausible trailer that no one wrote. Collect them mechanically —
 `b4 trailers -u` reads what was actually posted — rather than from memory.
+
+**Two more the commit message itself has to carry.** Bjorn Andersson, asking for
+the crash details to be written into a fix: *"It would be wonderful, for my
+understanding today, as well as people in the coming months to be able to search
+for the callstack etc on the mailing list, if you could provide some details about
+the crash."* The trimmed backtrace rule above says what to cut; this says why what
+remains matters — the message is the searchable record for whoever hits the same
+symptom in a year, so the symptom must appear in it in the words they will search
+for. And when a change logically applies to more platforms or boards than the one
+you tested, either apply it to all of them or say in the message which you left
+and why; a silently partial cleanup is the thing that gets found much later, by
+someone else.
 
 **Revision mechanics**, once a v1 has been reviewed (from
 [kernelnewbies PatchTipsAndTricks](https://kernelnewbies.org/PatchTipsAndTricks)):
@@ -1910,6 +1954,12 @@ work — so a self-review that stops at "sparse is clean" is half done.
 - [ ] **Imported register tables were brought to house style**: lowercase hex, no
       stray parentheses, no needless initialisers, `clamp()` instead of a min/max
       ladder.
+- [ ] **Binding schema mechanics**: hyphens not underscores in property names,
+      every vendor property typed via `types.yaml`, a `$ref` to the common schema
+      for pattern-matched subnodes, and a standard property used wherever one
+      exists.
+- [ ] **Subject lines visually match the subsystem's own** —
+      `git log --oneline -20 -- <file>` before naming the patch.
 - [ ] **`dt_binding_check` was run with an up-to-date dtschema**
       (`pip3 install dtschema --upgrade`), the `$id` matches the file's path and
       name, and the example compiles with every `required:` property present.
