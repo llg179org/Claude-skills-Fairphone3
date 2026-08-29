@@ -405,6 +405,95 @@ DTS commit. Keep the **audio DTS commit and the modem DTS commit separate**, eve
 when unsure whether they could be combined — the per-feature split is the safe
 default.
 
+### Only what is real and measured goes into the DTS
+
+A frequent review verdict, and it is narrower than it first sounds. Two rules that
+look alike are in play, and only one of them is "the driver does not use it".
+
+**The rule that does apply — no dead node.** A node whose only purpose is to make
+Linux bind a driver is rejected, in the bindings and in the DTS both:
+
+- `writing-bindings.rst`: *"DON'T create nodes just for the sake of instantiating
+  drivers. Multi-function devices only need child nodes when the child nodes have
+  their own DT resources."*
+- Krzysztof Kozlowski, reviewing a venus binding, 2024-11-25: *"Both nodes are
+  useless - no resources here, nothing to control. Do not add nodes just to
+  instantiate Linux drivers."*
+  (<https://lore.kernel.org/all/474cef98-4644-4838-b07c-950ad7515b73@kernel.org/>)
+- Same reviewer on an untested new SoC dtsi, 2024-12-16: *"We do not add dead code
+  to the kernel. You need users."*
+  (<https://lore.kernel.org/all/bx3r4cs3oklfduvkg65vke3clb3fc6sseske2ellq27ifpmsnm@msz6iqvjwufn/>)
+- Geert Uytterhoeven, 2021-05-17: *"Please do not add nodes not matching the
+  hardware description."*
+
+So: a node with no `reg`/`interrupts`/clocks/supplies of its own — nothing to
+address and nothing to control — is not a hardware description, it is driver
+plumbing wearing a DT costume. Drop it and fix the driver's probe instead.
+
+**The rule that does *not* apply — "the driver has no support yet".** The same
+document says the opposite for that case: *"DO attempt to make bindings complete
+even if a driver doesn't support some features. For example, if a device has an
+interrupt, then include the 'interrupts' property even if the driver is only
+polled mode"*, and *"DON'T refer to Linux or 'device driver' in bindings.
+Bindings should be based on what the hardware has, not what an OS and driver
+currently support."* Real hardware that Linux cannot yet drive is still real
+hardware. ☠️ Do not "clean up" a correct description because nothing consumes it
+yet — that is deleting a fact.
+
+**Where the two meet is `status`.** `dts-coding-style.rst` gives `status` exactly
+this job: *"Status is the last information to annotate that device node is or is
+not finished (board resources are needed)"* — the SoC DTSI carries the node
+`status = "disabled"`, and the board DTS that has actually wired the thing up
+flips it to `"okay"` and adds the board's supplies, GPIOs and pinctrl. Hence the
+practical form of the review comment: **a node you have not made work does not
+appear enabled in your board DTS.** Either it stays disabled in the SoC DTSI where
+it belongs, or it is not in this series.
+
+That is also the live disagreement, not a settled rule, so cite the shape rather
+than assert the law: on ipq9574, Manivannan Sadhasivam argued every PCIe instance
+should be described and the unused ones left disabled, while the submitter
+objected that *"someone may think it's supported, try to enable it on their board,
+and run into issues"* (<https://lkml.rescloud.iu.edu/2404.2/04197.html>). Both
+positions agree on the part that matters here: **enabled means tested.**
+
+**How this lands on an FP3 series.** Before sending a DTS commit, for every node
+and property it adds or enables, answer three questions:
+
+1. *Does this hardware exist on this board?* — if no, it does not go in at all.
+2. *Did I measure it working on the device, or is it inherited from the downstream
+   tree because it was there?* — anything only inherited is either dropped or
+   left `disabled`; the "initial dts" convention above says **working** nodes.
+   A vendor DTS is a source of hypotheses, not of facts.
+3. *Is this a hardware fact or my policy number?* — the same test as the
+   driver-constant trap above.
+
+And remember the DTS is an ABI other software reads: a wrong description does not
+merely fail to work, it gets consumed by a bootloader or another OS and then
+cannot be changed freely.
+
+**The instrument.** "Does this node actually live?" is measurable, not a matter of
+opinion — a DT node with a `compatible` and no bound driver shows up as an empty
+`driver` link in sysfs, which is what the in-tree kselftest
+`tools/testing/selftests/dt/test_unprobed_devices.sh` automates. On the device:
+
+```sh
+# enabled DT nodes carrying a compatible (two levels deep; widen the glob for
+# deeper buses such as the SLIMbus/I2C children)
+for n in /sys/firmware/devicetree/base/*/*; do
+        [ -e "$n/compatible" ] || continue
+        [ ! -e "$n/status" ] || grep -qa 'okay\|ok' "$n/status" || continue
+        printf '%s\t%s\n' "${n#/sys/firmware/devicetree/base/}" \
+                "$(tr -d '\0' < "$n/compatible")"
+done
+# and the other side: which platform devices never got a driver
+for d in /sys/bus/platform/devices/*; do
+        [ -e "$d/of_node" ] && [ ! -e "$d/driver" ] && echo "unbound: ${d##*/}"
+done
+```
+
+An `unbound:` line for a node this series adds is the reviewer's objection,
+found before the reviewer finds it.
+
 ### Measured against mainline, not asserted
 
 The rules above were checked against the actual commit history of qcom device
@@ -1504,6 +1593,13 @@ work — so a self-review that stops at "sparse is clean" is half done.
       from, *and* how we know that variant applies to this board. If the vendor tree
       ships alternatives (`ls` it), name the discriminator and the reading.
 - [ ] DTS split **per logical step**; no style/cleanup riding along with function.
+- [ ] **Every node the DTS adds or enables is real and was measured working.** No
+      node exists only to instantiate a Linux driver (no `reg`/irq/clock/supply of
+      its own = dead code); nothing inherited untested from the vendor tree is
+      enabled — a not-yet-working node stays `status = "disabled"` in the SoC DTSI
+      or stays out of the series. Checked on the device, not asserted: no node the
+      series adds is left unbound (see
+      [Only what is real and measured](#only-what-is-real-and-measured-goes-into-the-dts)).
 - [ ] Rebased across the base bump; **rebuilt + CONFIG-checked + `fp3-selftest` green.**
 - [ ] `scripts/checkpatch.pl --strict` clean; `scripts/get_maintainer.pl` used for
       the recipient set.
