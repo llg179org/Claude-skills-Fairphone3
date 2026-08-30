@@ -235,7 +235,9 @@ cost a device, a boot, or a wrong conclusion at least once.
 - A mid-operation snapshot can read identical working-vs-broken.
 - Every measurement needs a real path to PASS, stated in advance.
 - A null `grep` is not proof of absence until the pattern is validated against a known positive.
+- ☠️ **Validate a decode, not just a capture** — a lookup that resolves nothing looks exactly like a subject that has nothing to find. A table keyed in hex against a probe that prints decimal made every line read "not in the reference", which is indistinguishable from "the reference has no definition for these" and is far more likely to be believed, because it flatters the tool. Feed the decoder one synthetic record whose answer you already know before you trust a single real one; that is legitimate even under the no-fabrication rule, because the format is fixed by your own probe and the thing under test is the decode.
 - A clean log proves nothing until the channel is shown to report that event class at all.
+- ☠️ **A "done" line reports that a step ran, not that it worked** — read the completion handler before quoting it. The shape to look for is an error path that logs at debug level and then returns success anyway, and the sharper version of it is an error message guarded by the very branch you are on (`if (enable)` around the message, on the *disable* path), so the failure is not merely quiet but never emitted. Such a witness cannot say no, and a measurement that contradicts it is not in conflict with it — it is the only one of the two that carries information. Prefer an instrument that does not consult the subsystem's own self-report.
 - A source or device-tree comment is not evidence, and must not reopen a measured verdict.
 - Capture the full histogram and the init band, not only the filtered hits.
 - Confirm on the oracle that an endpoint is the **right** one before reverse-engineering its protocol.
