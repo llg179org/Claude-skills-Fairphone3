@@ -55,19 +55,26 @@ process.stdin.on('end', () => {
   const state = prune(read());
 
   if (event === 'PostToolUse' && ev.tool_name === 'Bash') {
-    // ☠️ STRIP HERE-DOCUMENTS BEFORE MATCHING. The first version of this hook
-    // fired on its own documentation: a `cat > file <<EOF ... systemd-run
-    // --unit=X ... EOF` that WRITES about launching a measurement is not
-    // launching one. Validating the checker's positive is the rule that caught
-    // it, one tool call after it was installed.
+    // ☠️ STRIP EVERYTHING THAT IS *TEXT ABOUT* A COMMAND BEFORE MATCHING.
+    // Two false positives in the first hour, both from this hook's own paperwork:
+    // a `cat > file <<EOF ... systemd-run --unit=X ... EOF` writing the rule
+    // down, and a `git commit -m "...systemd-run --unit=..."` describing it.
+    // Prose that mentions a launch is not a launch. Here-documents and -m
+    // message arguments are therefore blanked first, and placeholder unit names
+    // are ignored. Validating the checker's POSITIVE is what caught both, each
+    // time within one tool call of installing the "fix".
     const cmd = String(ev.tool_input?.command || '')
-      .replace(/<<-?\s*'?"?([A-Za-z_][A-Za-z0-9_]*)'?"?[\s\S]*?^\1$/gm, ' <heredoc> ');
+      .replace(/<<-?\s*'?"?([A-Za-z_][A-Za-z0-9_]*)'?"?[\s\S]*?^\1$/gm, ' <heredoc> ')
+      .replace(/-m\s+'[\s\S]*?'/g, ' -m <msg> ')
+      .replace(/-m\s+"[\s\S]*?"/g, ' -m <msg> ');
+    const PLACEHOLDER = /^(x|y|z|n|name|unit|foo|bar|test|example|abc|def)$/i;
     const bg = ev.tool_input?.run_in_background === true;
     const notes = [];
 
     // 1. a measurement being launched on the device
     for (const m of cmd.matchAll(/systemd-run\s+[^|;&]*?--unit=([A-Za-z0-9_.@-]+)/g)) {
       const unit = m[1];
+      if (PLACEHOLDER.test(unit)) continue;   // documentation, not a run
       if (!state[unit]) state[unit] = { started: Date.now(), watcher: false };
     }
 
