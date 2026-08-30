@@ -63,7 +63,7 @@ is why almost every technique below has a "golden side" and a "test side".
 
 ---
 
-## Say it unprompted: four things every report must carry
+## Say it unprompted: five things every report must carry
 
 These are **reporting** rules, not extra work. They exist because the failure
 they prevent is not "no check was run" — it is a check that ran, passed, and
@@ -104,6 +104,39 @@ worse than nothing. If there genuinely is none, the check belongs in
 host-side procedure. Either way, prove it against a **known positive**: a
 checking tool that reports "clean" has proved nothing until it has been shown
 failing on a case you know is broken.
+
+**5. A NEW instrument produces no reportable number until it has answered a
+question you already know the answer to.** This is a **gate, not advice** — the
+number does not get quoted, written into a capture, or told to the operator
+until the gate has been passed, and if there is no time for the gate there is no
+result.
+
+Rule 4 says a *check* must be shown failing on a known-broken case. Rule 5 is
+the same demand aimed at the other kind of tool: the ones that return a
+**measurement** rather than a verdict, where there is no "fail" to provoke.
+Their equivalent is a **regime whose answer is already on record** — run the new
+instrument there first and see whether it reproduces it.
+
+☠️ **The failure mode it exists to stop is not a wrong instrument, it is a
+plausible one.** Measured 2026-08-30, in a single afternoon, five results were
+produced by new tooling and read in the same breath as it was written:
+
+| what the instrument did | what it would have been reported as |
+|---|---|
+| bounded a sleep window one hop too early, then one hop too late | ModemManager's own handshake, counted as modem noise |
+| printed an accumulating counter only at the end | an absolute value where the answer is a delta — a count of 75 is compatible with **zero** events inside the window |
+| matched the wrong systemd states (twice, in opposite directions) | a 1634-line capture read as 4 lines; a 90-minute run reported finished after 11 seconds |
+| printed a wake IRQ as a bare number | a boot-local value promoted to a permanent name in prose |
+
+Every one of those was cheap to catch and would have been expensive to believe,
+and **none of them looked wrong** — that is the whole point. The one instrument
+that afternoon which *was* gated first (an awake control window for a new
+suspend-current fit, run in a regime with four prior readings) worked on its
+first attempt and, just as importantly, said what resolution it did **not** have.
+
+The gate is also what licenses the claim afterwards: an instrument validated
+against a known regime can be quoted at that regime's resolution and no finer,
+and the report should say which.
 
 ☠️ **The case this cost.** A DTB built in a camera-only worktree was deployed to
 the device, dropping the audio, voice, charger, sensor and debug layers. The
