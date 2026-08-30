@@ -238,6 +238,7 @@ cost a device, a boot, or a wrong conclusion at least once.
 - Check your request is valid before calling the subsystem broken — an unsupported parameter fails in the framework and logs nothing.
 - "The hardware cannot do this" is conditional on your own init — a register that never moves is a default, not a measurement.
 - One-sided is not a differential. Always run the oracle control.
+- ☠️ **A confound an order of magnitude larger than the effect does not weaken a comparison, it voids it** — and the two feel the same from inside, because the numbers still differ and the difference still has a sign. A switch was credited with tens of seconds while the same configuration, unchanged, ranged over a factor of ten between morning and midday. Every leg taken before the range was known is uninterpretable, however carefully it was run. Two consequences worth stating separately: **withdrawn is not reversed** (the verdict goes back to unknown, not to the opposite), and the half of the result that rests on a *coincidence* rather than an *average* survives — a one-second overlap between two logs is untouched by something that shifts durations.
 - A register that differs may be an **output/marker**, not a lever — prove causality before building on it.
 - Disprove a hypothesised lever **offline** first (a branch on a pointer bit is structurally constant).
 - A force/bypass cave can force the *wrong* lever; a force-negative counts only if content-faithful.
