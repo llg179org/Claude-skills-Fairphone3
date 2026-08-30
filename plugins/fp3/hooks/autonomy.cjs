@@ -44,7 +44,7 @@ const DIR = process.env.CLAUDE_STATE_DIR ||
 const FILE = path.join(DIR, 'fp3-autonomy.json');
 const MAX_BLOCKS = 4;
 
-const empty = () => ({ active: false, goal: '', items: [], nextId: 1, blocks: 0, lastHash: '' });
+const empty = () => ({ active: false, goal: '', items: [], nextId: 1, blocks: 0, lastHash: '', waitAnnounced: '' });
 function read() {
   try { return Object.assign(empty(), JSON.parse(fs.readFileSync(FILE, 'utf8'))); }
   catch { return empty(); }
@@ -109,7 +109,7 @@ if (argv.length) {
       console.error('usage: start|add|done|drop|note|show|stop');
       process.exit(2);
   }
-  if (cmd !== 'show') { s.blocks = 0; s.lastHash = hash(s); }   // any edit is progress
+  if (cmd !== 'show') { s.blocks = 0; s.lastHash = hash(s); s.waitAnnounced = ''; }  // any edit is progress
   write(s);
   console.log(render(s));
   process.exit(0);
@@ -143,6 +143,15 @@ process.stdin.on('end', () => {
     const open = openItems(s);
     const waiting = waitingItems(s);
     if (!open.length && waiting.length) {
+      // ☠️ SAY IT ONCE. The first version emitted this summary on every Stop, so a
+      // long wait produced the same paragraph turn after turn - the assistant
+      // repeated it to the user each time because it arrives as fresh context.
+      // A reminder that repeats unchanged is noise, and noise trains the reader to
+      // skip the channel it arrives on. Re-announce only when the set of waiting
+      // items actually changes.
+      const wsig = waiting.map((i) => `${i.id}:${i.note || ''}`).join('|');
+      if (s.waitAnnounced === wsig) { write(s); process.exit(0); }
+      s.waitAnnounced = wsig; write(s);
       process.stdout.write(JSON.stringify({
         hookSpecificOutput: {
           hookEventName: 'Stop',
