@@ -28,6 +28,10 @@
 //   node autonomy.cjs done <id> [note]    mark a step finished
 //   node autonomy.cjs drop <id> [why]     abandon a step, with the reason
 //   node autonomy.cjs note <id> "<text>"  record progress without finishing
+//   node autonomy.cjs wait <id> "<what>"  the item is blocked on something OUTSIDE
+//                                         this session - a measurement that has to
+//                                         run, a build, a person. It stays open and
+//                                         visible, but it does not hold the turn
 //   node autonomy.cjs show                print the plan
 //   node autonomy.cjs stop                end the run (user said stop, or done)
 'use strict';
@@ -49,7 +53,14 @@ function write(s) {
   try { fs.mkdirSync(DIR, { recursive: true }); fs.writeFileSync(FILE, JSON.stringify(s, null, 1)); }
   catch { /* bookkeeping must never break the session */ }
 }
+// ☠️ A 'waiting' item is open but NOT actionable, and the difference is the whole
+// point: blocking a turn over work that is waiting on a measurement produces a
+// nudge every turn while nothing can move, and any note written in response
+// restores the anti-spin budget, so it never terminates. That happened - the
+// hook pushed for the next item five times while every item was blocked on one
+// running measurement. Waiting items hold the plan, not the turn.
 const openItems = (s) => s.items.filter((i) => i.status === 'todo' || i.status === 'doing');
+const waitingItems = (s) => s.items.filter((i) => i.status === 'waiting');
 const hash = (s) => crypto.createHash('sha1')
   .update(JSON.stringify(s.items.map((i) => [i.id, i.status, i.text, i.note || ''])))
   .digest('hex').slice(0, 12);
@@ -57,7 +68,7 @@ const hash = (s) => crypto.createHash('sha1')
 function render(s) {
   if (!s.active) return 'No autonomous run is active.';
   const line = (i) => {
-    const mark = { todo: '[ ]', doing: '[~]', done: '[x]', dropped: '[-]' }[i.status] || '[?]';
+    const mark = { todo: '[ ]', doing: '[~]', done: '[x]', dropped: '[-]', waiting: '[…]' }[i.status] || '[?]';
     return `  ${mark} ${i.id}. ${i.text}${i.note ? `\n        · ${i.note}` : ''}`;
   };
   return [`GOAL: ${s.goal}`, ...s.items.map(line)].join('\n');
@@ -79,12 +90,13 @@ if (argv.length) {
       }
       s.active = true;
       break;
-    case 'done': case 'drop': case 'note': {
+    case 'done': case 'drop': case 'note': case 'wait': {
       const id = Number(rest[0]);
       const it = s.items.find((i) => i.id === id);
       if (!it) { console.error(`no item ${rest[0]}`); process.exit(1); }
       const text = rest.slice(1).join(' ');
       if (cmd === 'note') { it.status = 'doing'; it.note = text; }
+      else if (cmd === 'wait') { it.status = 'waiting'; it.note = text || it.note; }
       else { it.status = cmd === 'done' ? 'done' : 'dropped'; if (text) it.note = text; }
       break;
     }
@@ -129,6 +141,20 @@ process.stdin.on('end', () => {
   if (ev.hook_event_name === 'Stop') {
     if (!s.active) process.exit(0);
     const open = openItems(s);
+    const waiting = waitingItems(s);
+    if (!open.length && waiting.length) {
+      process.stdout.write(JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: 'Stop',
+          additionalContext:
+            `Every actionable item is done; ${waiting.length} item(s) are waiting on something ` +
+            `outside this session:\n` + waiting.map((i) => `  … ${i.id}. ${i.text}${i.note ? ` (${i.note})` : ''}`).join('\n') +
+            `\nNot blocking - there is nothing to do until those return. Say plainly what is ` +
+            `being waited on and roughly when, then stop.`,
+        },
+      }));
+      process.exit(0);
+    }
     if (!open.length) {
       process.stdout.write(JSON.stringify({
         hookSpecificOutput: {
