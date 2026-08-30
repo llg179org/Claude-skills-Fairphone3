@@ -1630,6 +1630,49 @@ carefully to work out whether your part is inside or outside it.
   of the check that catches it, in `/fp3-kernel-test` ("a file you hand-placed
   into a package-owned path is borrowed, not held").
 
+- ☠️ **What the distribution decided for you is the highest-yield thing to read, and
+  the last thing anyone reads.** A distro ships policy in package-owned files that
+  appear in neither the upstream documentation nor your own tree, and any one of them
+  can settle a performance or power question before you take your first measurement:
+  a service drop-in that appends a command-line switch, a gsettings override that
+  decides whether the session ever asks to suspend, an inhibitor config that holds
+  sleep off while you are logged in over the link you are measuring through, a kernel
+  cmdline fragment. The failure mode is not a wrong number — it is a correct number
+  attributed to the hardware, which survives review because nothing about it looks
+  false. **Run the sweep before the measurement, not after a surprising result:**
+
+  ```sh
+  # every unit drop-in, with the package that owns it
+  for d in /usr/lib/systemd/system/*.d /usr/lib/systemd/user/*.d; do
+    for f in "$d"/*.conf; do
+      echo "--- $f  [$(apk info -W "$f" 2>/dev/null | sed 's/.*owned by //')]"
+      grep -vE '^\s*(#|$)' "$f"
+    done
+  done
+  grep -rhvE '^\s*(#|$)' /etc/systemd/logind.conf /etc/systemd/logind.conf.d/*.conf \
+                          /etc/systemd/sleep.conf /usr/lib/systemd/sleep.conf.d/*.conf
+  cat /sys/power/mem_sleep                    # which sleep state is even available
+  systemd-inhibit --list                      # who is holding sleep off right now
+  gsettings list-recursively org.gnome.settings-daemon.plugins.power   # as the SESSION user
+  ```
+
+  Read the source side too — the distro's package tree is greppable in one command
+  (`grep -rl <switch-or-key> <aports>/`), which names the package, the file it
+  installs and usually a comment saying why. And when a switch turns up that way,
+  **read the code behind it, not its help string**: a help line states the intent
+  ("quick suspend/resume support"), while the branch it selects is where the
+  behaviour lives, and the two can differ by an entire subsystem being told to go
+  quiet. Cloning the upstream source beats fetching its pages — several forges now
+  sit behind anti-bot walls that hand a fetcher an access-denied page, and
+  `git clone --depth <n> --filter=blob:none` is both faster and greppable.
+
+  Two cases here paid for this rule, on different subsystems and months apart: a
+  session-wide renderer variable read for weeks as a camera pipeline problem (above),
+  and a suspend-mode switch whose meaning was assumed rather than read, at the cost
+  of days of power measurement. Both were one `grep` away in the distro's own tree.
+  The corresponding measurement-integrity rules — the sweep as a precondition, and
+  the sticky-state confound that hides this class — are in `/fp3-kernel-test`.
+
 - **A truncated function pointer segfaults instead of failing.** `ctypes`
   defaults a foreign function's return type to `int`, so
   `eglGetProcAddress(...)` hands back a 64-bit address with its top half cut

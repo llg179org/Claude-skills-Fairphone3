@@ -823,7 +823,18 @@ a few hours' work, and it takes the series from "nearly clean" to clean. Worked
   the same series — *"you consolidated the functions in the driver, but you forgot
   to update this list accordingly"* is a v2 that existed only for that.
 - **Where a binding patch goes in the series:** its own commit, before the driver
-  patch that adds the compatible. One binding patch for the whole series, even
+  patch that adds the compatible.
+- ☠️ **A new driver usually owes a `defconfig` patch too**, and it is the element
+  most often forgotten, because nothing on the developer's own machine needs it —
+  the local build already has the symbol enabled. The canonical shape of a driver
+  series is *binding → framework change → driver + Kconfig → **defconfig** →
+  DTS*. Check rather than assume in either direction; the symbol may already be
+  there because another board needed it:
+  ```sh
+  grep -E '^CONFIG_<SYMBOL>=' arch/arm64/configs/defconfig
+  ```
+  Already `=m` ⇒ no patch. Absent ⇒ the hardware cannot work on a stock kernel
+  build, which is most of the point of upstreaming it. One binding patch for the whole series, even
   when it documents properties three later patches introduce — splitting a
   binding across patches is unusual and reads worse.
 
@@ -1480,7 +1491,12 @@ GitHub-flow conveniences any more.
 - **Base off a well-known point.** A stable or `-rc` tag on Linus' tree (driver
   patches on the subsystem `-next`). Never a random mid-tree commit.
 - **`git commit -s`.** The `-s` adds *your* `Signed-off-by` (the DCO). Message in
-  **imperative mood** ("add", not "added"), body wrapped at **~75 columns**. Add a
+  **imperative mood** ("add", not "added"), **subject line at most 70–75
+  characters** and saying both what changes and why, body wrapped at **~75
+  columns**. When the body is hard to start, the shape that works is Matt
+  Porter's: *"Current code does (A), this has a problem when (B). We can improve
+  this doing (C), because (D)."* — it forces the *why* into the message instead
+  of leaving it in the diff. Add a
   `Fixes: <12-char-sha> ("subject")` tag when fixing a known commit, and `Cc:
   stable@vger.kernel.org` for a user-visible bugfix (e.g. the TX front-end hold).
   **`Link:` only when it points at something the commit does not itself contain**;
@@ -1506,6 +1522,11 @@ GitHub-flow conveniences any more.
   (`Documentation/devicetree/bindings/…`) travels with the **driver** subsystem
   tree; the board **`.dts`** goes via the **SoC/qcom** tree. Same "don't mix"
   discipline, but know which of the two a given file is.
+- **The SoC tree sorts what it takes into named branches** — `next/fixes`,
+  `next/cleanup`, `next/soc`, `next/drivers`, `next/boards`, `next/dt`. A board
+  `.dts` patch is `next/dt` material. You do not choose the branch, but the split
+  explains why a series mixing a driver change with board wiring has no single
+  place to go even inside one tree.
 - **The subject line copies the subsystem's own style.** Mark Brown, repeatedly:
   *"Please submit patches using subject lines reflecting the style for the
   subsystem, this makes it easier for people to identify relevant patches. Look at
@@ -2073,6 +2094,9 @@ Grouped, and each line is the *whole* rule — the sections above carry the why.
 
 **The mail**
 
+- [ ] **`defconfig` was checked, not assumed**: every `CONFIG_` symbol the series
+      needs is either already in `arch/arm64/configs/defconfig` or added by a
+      patch in the series.
 - [ ] Commits are `-s` signed, imperative-mood, wrapped ~75 cols, subject lines
       visually matching the subsystem's own (`git log --oneline -20 -- <file>`);
       `Fixes:`/`Cc: stable` on bugfixes; `Link:` only when it adds what the commit
@@ -2184,6 +2208,14 @@ guides. When in doubt, these are the ground truth:
   comments to expect: <https://kernelnewbies.org/PatchTipsAndTricks>
 - Andi Kleen, *On submitting kernel patches* (a classic catalogue of the comments
   reviewers give): <https://halobates.de/on-submitting-patches.pdf>
+- Matt Porter, *Upstreaming 201* (Linaro Connect HKG15, 2015-02-10) — worked
+  examples of a new platform and a new driver going upstream; the source of the
+  subject-length rule, the (A)(B)(C)(D) commit-message shape, the arm-soc branch
+  split and the defconfig element:
+  <https://www.slideshare.net/slideshow/hkg15901-upstreaming-201/44896634>
+  ☠️ SlideShare answers `curl` with a 3 kB "Client Challenge" bot page; and the
+  deck titles itself HKG15-**902** while the URL says 901. Being a 2015 deck, its
+  `arm-soc` is today's `soc/soc.git` — the branch names survived the rename.
 - Greg Kroah-Hartman, *How to (not) piss off a kernel subsystem maintainer*,
   parts 1–6 — the list-conduct failures distilled in
   [Conduct on the list](#conduct-on-the-list--the-ways-a-series-dies-with-no-technical-objection):
