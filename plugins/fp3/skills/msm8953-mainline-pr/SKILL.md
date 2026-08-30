@@ -66,6 +66,23 @@ to strangers, and two of its fabrications are invisible at a glance.
   and if the fetch fails, say so. (Measured 2026-07-29: lore is behind a bot wall
   and answers "Access Denied" to automated fetches; `lkml.iu.edu`'s hypermail
   mirror served the same thread.)
+- ☠️☠️ **The third fabrication is the one that reads best: an observation the
+  argument wants.** A draft reply to a maintainer contained *"a real bus read of
+  `SYSST`, taken with the cache bypassed, shows the lock bit set at a point where
+  the driver's own poll is still reading its first sample back."* That capture
+  does not exist, and the record says the **opposite** happened. It was written
+  because it is exactly the evidence the case needs, and it sits in the paragraph
+  looking identical to the real measurements around it — a maintainer has no way
+  to tell them apart, and neither does the next reader on your own side.
+  **A sentence describing an observation is a claim about a capture; if the
+  capture cannot be named, the sentence does not get written.** Not even with a
+  note to fix it before sending: the note travels in a different document than
+  the sentence does, and the sentence is what gets read.
+  ☠️ Its replacement was *stronger* — a two-sided A/B on the error code
+  (`-ETIMEDOUT` before the change, `-EIO` after, retry timing agreeing
+  independently) plus an explicit line on what that is and is **not** evidence
+  for. Reaching for the real measurement is not a concession; the invented one
+  was weaker as well as false.
 
 The whole point: the fork's topic branches are ordered by *discovery* (one commit
 per thing you learned, DTS and driver interleaved). Upstream wants them ordered by
