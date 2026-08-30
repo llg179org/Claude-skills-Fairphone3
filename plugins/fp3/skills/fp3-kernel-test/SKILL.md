@@ -234,6 +234,9 @@ cost a device, a boot, or a wrong conclusion at least once.
 - A force/bypass cave can force the *wrong* lever; a force-negative counts only if content-faithful.
 - A mid-operation snapshot can read identical working-vs-broken.
 - Every measurement needs a real path to PASS, stated in advance.
+- ☠️ **A gate at the door is not a gate at the window** — a validity precondition proved once, before the run, says nothing about the hour that follows. A measurement proved its panel dark, then sampled for an hour without re-checking the one condition it existed for; a panel switched back on midway would have read as extra current. Carry the precondition in **every sample**, have the reducing script *refuse* the number when it broke, and make the gate leave a trace in the **output file** — the person reading afterwards can no longer ask the phone. Then measure the instrument burden you just added: resolve the paths **once**, not per sample (≈200 file opens every 5 s, on a subject drawing ten milliamps).
+- ☠️ **A fix measured only against the bug it targets is half measured** — state in advance what resource it spends in exchange and measure that in the same round. The smell is setting *global* state to solve a *local* problem: a clock-notifier fix scored 27 720 transactions with zero faults on its own criterion and was, three days later, one of the phone's two largest wakeup sources.
+- ☠️ **A median split by the effect tests a proposed cause; it cannot discover one whose signature is a duty cycle.** A candidate that is up a third of the time has a median of zero on *both* sides of a split by outcome, so six instruments each reported "not me" from the file that held the answer. Reduce every capture with a candidate-state column **both** ways — split by outcome to test, group by the candidate to find — and run the correlation table first: it costs ten lines and points at the column before either split does.
 - A null `grep` is not proof of absence until the pattern is validated against a known positive.
 - ☠️ **Validate a decode, not just a capture** — a lookup that resolves nothing looks exactly like a subject that has nothing to find. A table keyed in hex against a probe that prints decimal made every line read "not in the reference", which is indistinguishable from "the reference has no definition for these" and is far more likely to be believed, because it flatters the tool. Feed the decoder one synthetic record whose answer you already know before you trust a single real one; that is legitimate even under the no-fabrication rule, because the format is fixed by your own probe and the thing under test is the decode.
 - A clean log proves nothing until the channel is shown to report that event class at all.
@@ -389,6 +392,24 @@ which allocation failed, which is often not the one the note blamed.
     Note this is a property of the *measurement vehicle*, not of the change under test:
     the package builds itself with its own compiler, so the mismatch never ships. Do not
     report it as a defect in the code you are testing.
+  - **☠️ The same `ftrace_bug` splat also means you built from the wrong BRANCH.** The
+    module must come from the tree the running kernel was built from — on this port
+    `debug-int/<base>`, **not** the `wip/<base>/<category>` branch the change is
+    committed on. The category branch is where the change *lives*; it is not what
+    the phone runs, and a module built there is missing every other layer. Measured
+    2026-08-29: `modprobe` gave the ftrace-modify WARN, then `lsmod` **segfaulted**
+    and `/proc/modules` hung — so read the *first* line of the splat, not the tool
+    that broke afterwards, because none of the later symptoms names the cause.
+  - **☠️ Keep the module you are replacing.** Copy it aside (or know which package
+    `.apk` holds it) *before* overwriting. In the case above the old module was
+    already unloaded and the on-disk copy overwritten by one that cannot load, so
+    the driver was unbound and **a reboot would have come up without it** — a failed
+    experiment turned into a failed boot by the copy step alone. And after any copy
+    to the device, verify **identity, not well-formedness**: `sha256sum` both sides
+    plus a line count. A syntax check answers "is this file well-formed", never "is
+    this the file I meant to send", and those look identical when the answer is
+    green — an ssh wrapper that eats stdin once delivered two lines of its own
+    chatter, which passed `sh -n` cleanly.
   - **☠️ `rmmod`+`modprobe` reloads the code but does NOT re-run the co-processor bring-up past
     the boot's FIRST cycle.** The first reload's `.probe()` re-runs the full path (worked once on
     `slim_qcom_ngd_ctrl`, ~15 s, needs `lsmod` used-by=0), but a *second* reload gives no new

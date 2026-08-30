@@ -196,6 +196,70 @@ items are ready and nothing else distinguishes them:
 3. **Whatever unblocks the most other items.**
 4. The rest, cheapest first.
 
+**A run measured in hours needs more than a transient unit.** `systemd-run
+--unit=… --collect` is the floor — it survives the ssh session, and that is all
+it survives. It does not survive a **reboot**, and `--collect` means there is not
+even a failed unit left to notice: an accidental power-off three hours into an
+eight-hour run took the unit with it, and the rungs written to `/tmp` went too,
+because `/tmp` is tmpfs. So write each completed stage to persistent storage **as
+it finishes**, pull it off the phone as it appears, and if the run must outlive a
+reboot give it a real unit with `Restart=` and a state file naming the stage it
+reached. Say the cost out loud when you choose otherwise: **a run that only
+reports at the end converts any interruption into total loss.**
+
+☠️ **And persistence is a property of the whole chain, not of the component you
+were thinking about.** A ladder was rebuilt to survive a reboot — real unit,
+rungs synced as they finish, state file, three host tests confirming a restart
+resumed at the right rung — and it would still have failed every remaining rung,
+because the runner invoked its instrument out of `/tmp`. The script *running*
+would have survived; the script it *runs* would not. Enumerate everything the run
+touches — runner, instrument, output, state, unit file, enable symlink — and ask
+of each whether it is on tmpfs, on an overlay, or in a transient unit. On this
+device the enable symlink is its own case, because UT overlays part of `/etc`, so
+a build-time `systemctl enable` does not necessarily survive to the next boot.
+Two corollaries: **a stub hides the path it replaces** — a test that substitutes
+a dependency at a different path leaves the real path untested by construction —
+and the fix that generalises is to resolve dependencies relative to the runner
+and **refuse to start** when one is missing, because a run that dies at 03:00
+with the host switched off reports nothing until morning.
+
+☠️ **A backgrounded command dies with the ssh session, and its absence looks
+exactly like slowness.** `fp3-ssh "sudo sh -c '(sleep 2; reboot) &'"` returned
+cleanly and did nothing; ten minutes then went into polling for a boot that had
+never started, while the free witness sat unread (`uptime`: same kernel, 5924 s).
+Reboot through PID 1 — `systemctl reboot --no-block` — and make **the first
+measurement after any state change be whether the change happened**, not whether
+the next state has arrived. The cost is never the missed step; it is the interval
+afterwards that you interpret as something else.
+
+☠️ **A retraction is not finished until the gate exists.** The most expensive
+lesson here: a findings-log recorded **in bold** that stopping one service cut
+the modem, withdrew four legs on that basis, and printed the fix — *"the modem
+verified `running` at the cut and at the end of the leg"*. Five days later the
+job file still cut that service, the tool verified nothing, and the overnight
+control leg was lost to exactly that. The rule was not behind a link and not even
+in a skill; it was in our own log, next to the command. It still did not fire,
+because a findings-log is read when you are looking for a finding, and nobody is
+looking for a finding at the moment they schedule a night run. ⇒ **A rule written
+in prose is a wish; a rule written into the tool is a rule.** Where a measurement
+has a validity precondition, that precondition belongs in the script as a gate
+that can *fail and say why*.
+
+☠️ **Print the state beside every result, even when nobody has asked what it is
+for.** A leg script emitted `slept=Ns of Ms` on every arm for no reason anyone
+could name at the time. Five days later, when an independent run showed that one
+configuration could not have slept the whole window, the contamination in two old
+captures became readable **from the raw file, with no re-run and no new
+instrument** — all that was missing had been a reason to look at the column. The
+reason a future reader will look does not exist yet while the run is going.
+
+☠️ **n=5 in one direction is not a law.** "With the radio up the phone does not
+sleep" was written categorically off five aborted suspends and two instruments,
+and a third broke it within the hour (601 s of a requested 600, modem up). Not
+once had it been tried in a way that could fail. Before promoting an observation
+to a rule, **run one round aimed at breaking it** — and treat the word
+"categorically" as forbidden until there is an attempt that failed to break it.
+
 **If you do have to stop, leave a one-line resume point, not a menu.** End on the single
 physical act or the single decision that is actually needed, phrased so the reply can be
 one word. A five-way list guarantees the human has to re-read the whole session before
@@ -788,6 +852,69 @@ noticed, decide which quantity that is, and only then choose the instrument.
 Wall-clock throughput, processor time, memory bandwidth and latency are four
 different questions and a pipeline can be flat in one while it doubles in
 another.
+
+### Before spending a window, grep the captures — for the FIELD, not the topic
+
+Captures are indexed by date and by the question that prompted them, never by
+what they contain, so the search that finds them is
+`grep -rln '<counter or field name>' captures/` — not a search for the subject.
+Twice in one hour an expensive run was planned for something the repository had
+already answered: an oracle comparison was queued as a slot switch while a window
+carrying exactly those counters sat committed from three days earlier, taken for
+a different investigation. Two snapshots of an *accumulated-duration* counter are
+not a worse duty-cycle instrument than sampling — the difference **is** the
+integral.
+
+☠️ And read the closed leads before spending the window, not after. **A lead's
+closing banner is a claim like any other**, and on this device one had gone false
+without anyone noticing — a subsystem the banner said "now duty-cycles" measured
+0 % in five windows of five. A re-opened lead that has already been *priced* (an
+effect bounded at a few percent, inside the instrument's spread) must not be
+allowed to re-order the queue on the strength of being interesting again.
+
+### Decide what shape a dump is before you diff it
+
+☠️ **A hierarchical dump read as a list invents differences.** In
+`regulator_summary` the indented rows under a rail are its **child regulators**,
+not merely its consumers; read flat, two rails appeared "on for us, off on the
+oracle", and that was published for several hours. At leaf level the two sets
+were identical — both rails were held through a child, by a USB PHY and by the
+eMMC I/O. Tree, list or table is a decision you make *before* diffing, because
+the diff itself will not tell you: it compares lines either way and reports
+confidently.
+
+☠️ **A sysfs attribute describing CONFIGURATION looks exactly like one
+describing STATE.** `regulator/*/microvolts` is the rail's *set* voltage and does
+not move when the rail is switched off; `state`/`enable` is what moves. One
+`microvolts=5500000` reading grew into a months-old claim that a panel blank was
+only half a blank and that the oracle had never been measured with a dark panel.
+⇒ **Before accepting a sysfs file as a witness, move the hardware and check the
+file follows. A witness you have not seen change is not a witness.** This is the
+mirror of "two instruments sharing a layer are one instrument": there, two files
+gave one quantity; here, one file offers two different quantities in the same
+shape.
+
+☠️ **Independence is decided by the shared front-end, not by the name of the
+quantity.** An instantaneous current and an integrated charge are different
+enough that reading them as independent confirmation is automatic — and on this
+device both come out of the same fuel-gauge block through the same sense
+resistor. A conclusion was published and withdrawn inside an hour on that. Before
+writing "two instruments agree", say out loud which chip, driver or ADC produces
+both; if it is the same one, one instrument spoke twice. Watch *when* the
+exonerating argument arrives, too: that one retired, on a bad reason, the single
+hypothesis that would have explained the whole table and left the project's
+reference number intact.
+
+### A documented option is not an implemented option
+
+☠️ **A help string is documentation, not capability.** `qbootctl`'s help
+advertises a switch for exactly our case (`-i  still write the GPT headers even
+if the UFS bLun can't be changed`) and the switch **is not implemented** — the
+same binary that printed the help answers `unrecognized option: i`. When a plan
+depends on a documented option, exercise it empty first; a `--help` line is not
+evidence that code exists behind it. (The same reflex applies to a flag whose
+*name* implies a behaviour: read the code the switch reaches, not its
+description.)
 
 ### Sample several times faster than the fastest thing you are willing to believe in
 
