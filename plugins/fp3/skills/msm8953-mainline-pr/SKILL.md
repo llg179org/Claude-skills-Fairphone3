@@ -1486,6 +1486,45 @@ What survives such a series is whatever does not live in the imported files. Her
 that was exactly one commit — a core fix in a different subsystem — and one honest
 patch beats twelve unsendable ones.
 
+### ☠️ The proxy problem: do not carry code you cannot defend
+
+Tim Bird named this at ELCE 2014 and it is the failure mode most likely to catch
+this port, because almost everything here starts as somebody else's work. A
+**proxy** is whoever submits code they did not write. The symptoms he lists are
+exactly what review does to a proxy: cannot answer questions in a timely manner,
+lacks in-depth knowledge of the change, may not be able to test thoroughly — and
+it is worst when the code is far from mainline, because upstream has refactored
+since and no longer looks like what you are holding.
+
+It is not hypothetical here. The MSM8953 machine-driver series this port depends
+on stalled with its submitter writing, in public, *"i don't feel good sending
+code i don't understand much"* — after a reviewer asked one question he could not
+answer.
+
+**The test, applied before adopting anyone's patch:** for every hunk, can you say
+why it is written that way, and what happens if it is not there? Where the answer
+is no, you have two honest moves and neither is "send it anyway":
+
+- **hand it back** — help the original author submit, which is faster than
+  learning their hardware; or
+- **learn it well enough to own it**, and say in the message that you did, naming
+  what you verified and how.
+
+The general form of the second is the rule this skill already carries about
+answering "why is it done this way" — the proxy problem is that question arriving
+about a line you did not write.
+
+### ☠️ A hack you carry across releases is a decision, not a stopgap
+
+Also Tim Bird: a quick hack can be the right call once, so the practice is to
+**measure how long it has been in your tree** and rework it when it survives from
+release to release — and to *tag* such hacks so they can be tracked at all. On a
+rolling forward-port this is the difference between a workaround and a private
+fork: every rebase that carries a hack forward is a decision to keep it, made
+silently. Grep your own tree for the ones you inherited, too — the MSM8953
+machine-driver support we build on contains a block whose own comment says
+`/* HACK … */`, and it has been rebased for two years.
+
 ### `submit` must stay a distillation of `wip`
 
 The rule says `submit/<base>/<cat>` is regenerated from `wip`, never hand-edited,
@@ -2249,6 +2288,14 @@ guides. When in doubt, these are the ground truth:
   comments to expect: <https://kernelnewbies.org/PatchTipsAndTricks>
 - Andi Kleen, *On submitting kernel patches* (a classic catalogue of the comments
   reviewers give): <https://halobates.de/on-submitting-patches.pdf>
+- Tim Bird, *Overcoming Obstacles to Mainlining* (ELCE 2014) — a survey of why
+  people who can upstream do not; the source of the proxy problem and of the
+  "measure how long a hack has lived in your tree" practice. Most of it is about
+  corporate obstacles that do not apply to a personal port; those two do.
+- Neil Armstrong, *No, It's Never Too Late to Upstream Your Legacy Linux Based
+  Platform* (ELCE 2016) — workflow shapes for carrying a BSP and an upstream
+  effort at once, and the calibration distilled in
+  [`fp3-pmaports/docs/upstreaming/bringup/`](https://github.com/llg179org/fp3-pmaports/blob/main/docs/upstreaming/bringup/README.md).
 - Olof Johansson, *arm-soc* (ELC 2013) — the SoC maintainer's own account of the
   category branches, the cross-tree dependency handshake and why a driver/DTS
   split keeps bisectability. ☠️ A 2013 deck: `arm-soc` is today's `soc/soc.git`
