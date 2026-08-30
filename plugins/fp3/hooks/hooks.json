@@ -19,6 +19,24 @@
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/measurement-watch.cjs\""
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/autonomy.cjs\""
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/autonomy.cjs\""
+          }
+        ]
       }
     ]
   }
