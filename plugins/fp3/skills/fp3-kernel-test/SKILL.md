@@ -219,6 +219,16 @@ reset: it clears the "unbootable"/retry state on a slot you just broke.
   when the link is mid-reconnect — a thermal ramp measured this way silently ran three
   times, each starting from where the last left off. Keep remote commands short and
   idempotent, or capture to a file on the device and fetch it.
+  ☠️ **And its patience is shorter than most measurements.** The wrapper retries
+  12 times at `ConnectTimeout=8` — roughly two minutes — while a phone in a
+  sleep-residency run is unreachable for 602 s of every 622. So an invocation
+  almost always spans only unreachable time and exits *"giving up after 12
+  attempts"*, which reads like a dead device and is not one. Raise the documented
+  knob instead: `FP3_SSH_TRIES=250 fp3-ssh '...'` spans a whole sleep cycle and
+  catches the short awake window. The two halves are one trap seen from opposite
+  ends — a longer retry budget multiplies the blast radius of the re-run above,
+  so raise it only for a command that is safe to run several times, and have it
+  print a marker the caller can check.
 - **Unattended access, the device facts, and the helper scripts are not restated here.**
   `fp3-ssh` / `ut-ssh` log in by key and heal the link themselves, so neither OS needs a
   human at the phone; the recipe, the partition map and the scripts are owned by

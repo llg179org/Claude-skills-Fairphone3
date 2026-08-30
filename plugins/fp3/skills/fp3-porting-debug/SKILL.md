@@ -1449,12 +1449,28 @@ carefully to work out whether your part is inside or outside it.
   to an MSM8953 bring-up; `MSM8996_Mainlining`, `SDM845_Mainlining`). Read them for
   *bring-up order* — initial DTS, simplefb for first output, UART pads, ramdisk +
   boot image, remoteprocs — not for their feature matrices, which are dated status.
-  ☠️ **Reach method:** the whole wiki sits behind an **Anubis** bot wall that
+  ☠️ **Reach method:** the article URLs sit behind an **Anubis** bot wall that
   answers **HTTP 200 with a ~7 kB "Making sure you're not a bot!" page for every
-  URL**, `?action=raw` and `api.php` included — so `curl` "succeeds" and you get a
-  challenge page whose size is identical for every article. A `wc -c` around 7.5 kB,
-  or four downloads of the same byte count, *is* the failure signal. Save from a
-  browser (Printable version → print to PDF) and read it with `pdftotext -layout`.
+  URL**, `?action=raw` included — so `curl` "succeeds" and you get a challenge page
+  whose size is identical for every article. A `wc -c` around 7.5 kB, or four
+  downloads of the same byte count, *is* the failure signal.
+  ☠️☠️ **This line used to say `api.php` was walled too. Measured 2026-08-30: it is
+  not** — the MediaWiki API answers unauthenticated and returns the full wikitext:
+
+  ```sh
+  curl -sL "https://wiki.postmarketos.org/api.php?action=parse&page=<Page>&prop=wikitext&format=json" \
+    | python3 -c "import json,sys; print(json.load(sys.stdin)['parse']['wikitext']['*'])"
+  ```
+
+  The general form is worth more than the URL: **a site's bot wall is usually on
+  the HTML front end, not on the machine-readable endpoint the same server
+  exposes.** Try the API before concluding a source is unreachable — the same
+  holds for GitLab, where
+  `https://gitlab.postmarketos.org/api/v4/projects/postmarketOS%2Fpmaports/issues/<n>`
+  and `/repository/files/<url-encoded-path>/raw?ref=main` both answer without a
+  token (`search?scope=blobs` does not, and ☠️ `ref=master` 404s — the branch is
+  `main`). Falling back to a browser (Printable version → print to PDF, read with
+  `pdftotext -layout`) is the last resort, not the first.
 - **Durable background material** (the pmOS `Mainlining` page's reading list, kept
   because these age slowly — talks and slides, not status):
   *ARM64 SoC Linux Support Check-List* (Bootlin/Clément, slides — a step-by-step of
