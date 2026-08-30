@@ -1402,6 +1402,16 @@ echo 1 > /sys/kernel/tracing/events/kprobes/enable
   ```
   `systemd-run --collect` is what makes it survive both the suspend and the SSH
   session dropping — a plain backgrounded job does not.
+- ☠️ **An unattended run and the task watching it are one object; start and stop
+  them together.** Launching the measurement without a background watcher makes the
+  user poll you for the result, and stopping a superseded measurement without
+  stopping its watcher leaves a task that will later report on an aborted run as
+  though it were a result. Both happened here repeatedly *after* the rule was
+  written down in prose, which is the point: a guard belongs in code, not in a
+  paragraph. It now lives in `~/.claude/hooks/fp3-measurement-watch.cjs`, which
+  pairs `systemd-run --unit=` launches with background watchers and speaks up at
+  the moment the pairing breaks. Say the ETA when you start one, too — "roughly
+  when" is most of what the polling was asking for.
 - ☠️ **Your own polling can be the wake source.** If the WiFi RX interrupt is
   wake-armed, an SSH probe is an experiment, not an observation. Log on the
   device and read the log *afterwards*; do not poll a phone whose sleep you are
