@@ -1028,6 +1028,39 @@ applies to *their* tree; a mirror branch under your account is not in anyone's
 archival-snapshot recipe below — and it must never become the base of a `submit`
 branch, because that hides exactly the fact a reviewer needs.
 
+### A dependency that crosses trees is a handshake, not a tag
+
+`prerequisite-patch-id:` handles "my series needs a patch that is posted". A
+*different* problem appears once both halves are being merged: your driver patch
+goes to one tree and your `.dts` to another, and something has to keep them
+consistent. Olof Johansson, then the arm-soc maintainer, on how that is actually
+handled (ELC 2013):
+
+- ☠️ **It is a three-way agreement — you, the other subsystem's maintainer, and
+  the SoC maintainers — and it is made over email, not IRC.** A dependency nobody
+  else has agreed to is not a dependency, it is a hope.
+- ☠️ **A branch other people pull is frozen. "Never, ever rebased."** The moment a
+  second tree pulls your branch, rebasing it corrupts both. This is the opposite
+  of how our own `submit/*` branches work (regenerated from `wip`), so it is a
+  habit that has to be switched off deliberately.
+- **The easy case has an easier form still**: for a *new* driver, either the
+  driver maintainer takes the driver patch, **or** he gives an `Acked-by` and
+  agrees that the SoC tree takes both. Which one is preferred varies by
+  maintainer and by what else they have in flight — so **ask**, rather than
+  choosing for them.
+- **Splitting driver from DTS does not break bisect, and that is the point.**
+  *"Even if driver and DT is merged separately, bisectability is kept — driver
+  just won't probe."* A tree with the DT node and no driver, or a driver and no
+  node, boots; the hardware is simply absent. This is the answer to the obvious
+  worry about our own audio series, whose driver goes to ASoC and whose board
+  wiring goes to the qcom tree: the window between the two merges is harmless.
+- **Say what you want done with the patch.** *"Want us to apply a patch directly?
+  Tell us, don't assume we will — we get a lot of patches our way, most for
+  review."* An RFC and a patch meant to be applied look similar in an inbox.
+- **Test the destination's `for-next` *and* linux-next**, not just your own base.
+  It "short-circuits the loop on breakage", and for a board port it costs one
+  build.
+
 ### Archive an import as a parentless snapshot, not a mirror
 
 The citation in §2b resolves only while the source repository exists, and personal
@@ -1522,11 +1555,14 @@ GitHub-flow conveniences any more.
   (`Documentation/devicetree/bindings/…`) travels with the **driver** subsystem
   tree; the board **`.dts`** goes via the **SoC/qcom** tree. Same "don't mix"
   discipline, but know which of the two a given file is.
-- **The SoC tree sorts what it takes into named branches** — `next/fixes`,
-  `next/cleanup`, `next/soc`, `next/drivers`, `next/boards`, `next/dt`. A board
-  `.dts` patch is `next/dt` material. You do not choose the branch, but the split
-  explains why a series mixing a driver change with board wiring has no single
-  place to go even inside one tree.
+- **The SoC tree sorts what it takes into named branches** — Olof Johansson's own
+  list is `next/fixes-non-critical`, `next/cleanup`, `next/multiplatform`,
+  `next/soc`, `next/drivers`, `next/boards`, `next/dt`, and it says "usually
+  consists of", so treat the set as approximate. A board `.dts` patch is
+  `next/dt` material. **The maintainer does the sorting, not you** — but knowing
+  it explains why a series mixing a cleanup, a feature and board wiring has no
+  single place to go even inside one tree, and why organising your series along
+  those lines makes it easy to apply.
 - **The subject line copies the subsystem's own style.** Mark Brown, repeatedly:
   *"Please submit patches using subject lines reflecting the style for the
   subsystem, this makes it easier for people to identify relevant patches. Look at
@@ -2094,6 +2130,11 @@ Grouped, and each line is the *whole* rule — the sections above carry the why.
 
 **The mail**
 
+- [ ] **Any cross-tree dependency was agreed by email with both maintainers**, and
+      any branch another tree pulls is frozen — never rebased. Where a single tree
+      could take both halves, that was *asked*, not assumed.
+- [ ] **The mail says what it wants**: review, or application. Most of what a SoC
+      maintainer receives is for review, so an applicable series says so.
 - [ ] **`defconfig` was checked, not assumed**: every `CONFIG_` symbol the series
       needs is either already in `arch/arm64/configs/defconfig` or added by a
       patch in the series.
@@ -2208,6 +2249,10 @@ guides. When in doubt, these are the ground truth:
   comments to expect: <https://kernelnewbies.org/PatchTipsAndTricks>
 - Andi Kleen, *On submitting kernel patches* (a classic catalogue of the comments
   reviewers give): <https://halobates.de/on-submitting-patches.pdf>
+- Olof Johansson, *arm-soc* (ELC 2013) — the SoC maintainer's own account of the
+  category branches, the cross-tree dependency handshake and why a driver/DTS
+  split keeps bisectability. ☠️ A 2013 deck: `arm-soc` is today's `soc/soc.git`
+  and the maintainers have changed, but the mechanics it describes have not.
 - Matt Porter, *Upstreaming 201* (Linaro Connect HKG15, 2015-02-10) — worked
   examples of a new platform and a new driver going upstream; the source of the
   subject-length rule, the (A)(B)(C)(D) commit-message shape, the arm-soc branch
