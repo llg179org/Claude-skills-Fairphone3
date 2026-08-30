@@ -759,6 +759,12 @@ Don't "fix" these — they are correct as-is:
   would be wrong.
 - **`slim217,...` "undocumented vendor"** — SLIMbus compatibles are `slimMFG,PID`
   (manufacturer id), not a vendor-prefix; checkpatch's heuristic doesn't know that.
+- **"Prefer a maximum 75 chars per line" on a quoted oops header** — the
+  `Unable to handle kernel NULL pointer dereference at virtual address …` line is
+  86 characters and must not be rewrapped: `submitting-patches.rst`
+  §"Backtraces in commit messages" says to keep the header above `Call trace:`,
+  because it is what says *what* happened. Rewrap the prose around it; leave
+  quoted kernel output byte-exact.
 - **"DT compatible … appears un-documented"** — real only in that a YAML binding is
   still owed (a genuine follow-up for LKML), not a code defect. Writing it is cheap
   and it is the item that closes; see [Writing the binding](#writing-the-binding).
