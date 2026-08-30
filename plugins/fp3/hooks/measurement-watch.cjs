@@ -111,7 +111,8 @@ process.stdin.on('end', () => {
         `Unattended measurement running on the device: ${orphans.map((u) => `\`${u}\``).join(', ')}. ` +
         `Start a background watcher for it in this same response, so the result arrives on its own ` +
         `and the user does not have to ask whether it finished — e.g. Bash with run_in_background: ` +
-        `\`until ! fp3-ssh 'systemctl is-active ${orphans[0]}' | grep -q active; do sleep 60; done; <report>\`. ` +
+        `\`until [ "$(fp3-ssh "systemctl show -p ActiveState --value ${orphans[0]}")" != active ]; do sleep 60; done; <report>\`. ` +
+        `☠️ Do NOT poll with \`systemctl is-active\`: it exits non-zero once the unit stops, and an ssh wrapper that retries on failure then loops forever — the watcher hangs at exactly the moment the measurement finishes. \`systemctl show -p ActiveState\` always exits 0. ` +
         `Also tell the user roughly when it will finish.`
       );
     }
