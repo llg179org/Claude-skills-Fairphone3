@@ -1630,6 +1630,20 @@ carefully to work out whether your part is inside or outside it.
   of the check that catches it, in `/fp3-kernel-test` ("a file you hand-placed
   into a package-owned path is borrowed, not held").
 
+- ☠️ **A capture is true as of its date; the retraction lives somewhere else.** A
+  raw capture and its write-up are a snapshot of what was believed when the
+  measurement ran, and nothing in the file changes when a later run overturns it —
+  so quoting a capture's own conclusion is quoting the past with the confidence of
+  the present. The failure has a signature worth knowing: **the flattering outlier
+  is the one that travels.** Of several windows measuring the same thing, the one
+  that makes the story most striking gets lifted into a summary sentence, and every
+  later comparison inherits it — including comparisons made by whoever wrote the
+  retraction, months later, reading their own capture. Before quoting any figure out
+  of a capture, grep the running findings log for the number and for the thing it
+  measures; where the two disagree, the log is newer by construction. And when you
+  do retract a figure, write the retraction *where the figure is quoted*, not only
+  where it was born.
+
 - ☠️ **What the distribution decided for you is the highest-yield thing to read, and
   the last thing anyone reads.** A distro ships policy in package-owned files that
   appear in neither the upstream documentation nor your own tree, and any one of them
