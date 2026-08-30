@@ -150,6 +150,15 @@ reset: it clears the "unbootable"/retry state on a slot you just broke.
   '^\[sudo\]'` then deletes that whole line *including your output*, and the command looks
   like it produced nothing (but `rc=0`). Fix: send the prompt to `/dev/null` —
   `echo <pw> | sudo -S sh -c '…' 2>/dev/null` — instead of grep-filtering it. Stabilise the
+  ☠️ **And a quoted snippet that survives the host is not one that survives the device.**
+  In `fp3-ssh 'echo pw | sudo -S sh -c "… $(basename $m) …"'` the single quotes stop the
+  *host* shell, so a host-side dry run shows the command passing through intact — and then
+  the device's **login** shell expands the double-quoted string before `sh -c` ever runs it,
+  with the loop variable still unset. The result is not an error: `basename` printed its
+  usage text into the middle of a capture. The expansion happens one hop further along than
+  the harness can see, so no amount of local testing reproduces it. **Anything with a
+  `$(…)`, a loop variable or a nested quote belongs in a deployed file**, copied and
+  checksummed, not in an argument string.
   host↔device CDC-NCM link to a fixed iface name + static host IP once (method under
   "Reading the device state") so reconnects are deterministic; optional wrapper scripts
   (`fp3-ssh`, `fp3-link`) are just shorthand for those steps.
