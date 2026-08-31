@@ -72,19 +72,68 @@ modes recurred often enough to be worth automating away.
 
 A run's plan lives outside the conversation, so a compaction or a long
 measurement does not lose it, and the model does not end a turn with work still
-open. It hooks `UserPromptSubmit` (re-injects the plan) and `Stop` (blocks an
-early finish).
+open. It hooks four events:
+
+| event | what it does |
+|---|---|
+| `SessionStart` | hands the plan and the findings back — including `source=compact`, so a compaction resumes without waiting for the user to speak |
+| `PreCompact` | flushes the resume block to disk before the context goes |
+| `UserPromptSubmit` | re-injects the plan and returns the anti-spin budget |
+| `Stop` | blocks an early finish, and blocks when results have landed that nothing recorded |
+
+☠️ **`SessionStart` is the one that was missing, and the gap is not obvious.**
+Until 2026-08-31 the plan was injected on `UserPromptSubmit` only — but an
+autonomous run goes hours without a user prompt, so a session that came out of an
+auto-compaction ran blind until the user happened to say something. The state
+file had survived the whole time; nothing read it.
+
+**The resume block.** With `status <path>` set, the hook writes a generated block
+between `<!-- FP3-AUTONOMY-RESUME:BEGIN/END -->` markers at the top of that file,
+on every plan edit and before every compaction. That is the durable copy a
+resumed session reads first, and generating it is the point: the block it
+replaced was written by hand at the end of a session, so whatever the hand-written
+pass forgot was simply gone.
+
+**The staleness gate.** `watch <dir>` names a directory whose new contents mean a
+result landed. When something in it is newer than the last plan edit — or the
+docs tree has uncommitted changes — `Stop` blocks and asks for a `measured`,
+`retracted` or `note` before the turn ends, because that is exactly the state an
+auto-compaction turns into lost work. ☠️ It shares the anti-spin budget on
+purpose: a second budget is a second way to spin. ☠️ And it excludes the status
+file itself, which this hook writes — a gate that fires on its own output can
+never be cleared, and trains the reader to ignore the channel.
 
 ```
 node autonomy.cjs start "<goal>"      begin a run
 node autonomy.cjs add "<step>" [...]  append steps
-node autonomy.cjs done <id> [note]    finished
-node autonomy.cjs drop <id> [why]     abandoned for good, with the reason
 node autonomy.cjs note <id> "<text>"  progress without finishing
 node autonomy.cjs wait <id> "<what>"  blocked on something OUTSIDE this session
+node autonomy.cjs done <id> <evidence> [-- <note>]   finished; EVIDENCE REQUIRED
+node autonomy.cjs drop <id> [why]     abandoned for good, with the reason
+node autonomy.cjs measured  <evidence> -- "<claim>"     a claim that now stands
+node autonomy.cjs retracted "<claim>" -- "<why it fell>" a claim that has fallen
+node autonomy.cjs status <path/to/STATUS.md>   where the resume block is written
+node autonomy.cjs watch <dir>         a directory whose new contents mean "a result landed"
+node autonomy.cjs flush               rewrite the resume block now
 node autonomy.cjs show                print the plan
 node autonomy.cjs stop                end the run
 ```
+
+**Evidence is one token, and every form but the last is checked to exist:**
+`<path>` · `<path>:<line>` (the file has at least that many lines) ·
+`commit:<sha>` (resolves in one of the known repos) · `capture:<dir>` ·
+`unverifiable:<why>` — the escape hatch, accepted but rendered as UNVERIFIED,
+because a gate with no way out is a gate that gets lied to.
+
+☠️ **Why `done` demands an artefact.** Measured 2026-08-31: an item was closed
+with the note *"promoted to the skill (see below)"* — a forward reference that
+was never fulfilled. On resume it read as finished work, and the lesson it
+claimed to carry was nowhere. Free text will happily record a job that was not
+done; a path that must exist will not.
+
+☠️ **Never delete a disproven claim — `retracted` it.** Five claims fell in 24 h
+on 2026-08-31, and a deleted one gets rediscovered by the next session with the
+same reasoning that produced it. The reason it fell is the load-bearing half.
 
 ☠️ **`wait` is the one that gets forgotten, and forgetting it has a specific
 cost.** A measurement window that must run its course, a build, a boot, an answer
