@@ -180,6 +180,70 @@ once under `~/.claude/hooks/` — and both repository copies fell behind, hiding
 fix in the one that was actually running. The live paths are symlinks into
 `plugins/fp3/hooks/` now.
 
+## The status line — `statusline.sh`
+
+`plugins/fp3/statusline.sh` renders the one line under the prompt:
+
+```
+[Opus 5 (1M context)] [medium] you@example.com | ctx:6% (62849/1000000) | 5h:22% (09:20) | 7d:29% (09-03 04:00) | fable:0%
+```
+
+Install it the same way as the hooks — one copy, symlinked — and point
+`settings.json` at the symlink:
+
+```sh
+ln -s "$PWD/plugins/fp3/statusline.sh" ~/.claude/statusline.sh
+```
+
+```json
+"statusLine": { "type": "command", "command": "~/.claude/statusline.sh", "refreshInterval": 30 }
+```
+
+It reads paths from `$CLAUDE_CONFIG_DIR` (default `~/.claude`), so nothing is
+tied to one machine.
+
+**Two sources, and knowing which is which is the whole method.** Claude Code
+hands the script a JSON blob on stdin — that carries the model, the effort
+level, the context window, and exactly two usage buckets, `five_hour` and
+`seven_day`. Everything else has to be asked for over the OAuth REST API, using
+the token in `~/.claude/.credentials.json` with an
+`anthropic-beta: oauth-2025-04-20` header:
+
+| what | endpoint | field |
+|---|---|---|
+| account e-mail | `https://api.anthropic.com/api/oauth/profile` | `.account.email` |
+| all usage buckets | `https://api.anthropic.com/api/oauth/usage` | `.limits[]` |
+
+Both replies are cached in `$CLAUDE_CONFIG_DIR` (e-mail 1 h, usage 60 s) so a
+30-second refresh does not mean a request per refresh. The usage reply is written
+to a temp file and validated with `jq -e '.limits'` before it replaces the cache —
+an error body must not become the answer for the next minute.
+
+☠️ **`https://claude.ai/api/account` answers 403 to the CLI's OAuth token.** An
+earlier version used it for the e-mail, and the failure mode is the nasty one:
+`curl -sf` fails silently, the segment simply goes blank, and the line still looks
+plausible. Use the `oauth/profile` endpoint above.
+
+☠️ **The per-model weekly quota is not in the stdin JSON at all.** Look for it
+there and you will conclude it does not exist. It is in the `usage` reply under
+`.limits[] | select(.kind == "weekly_scoped")`, named by
+`.scope.model.display_name`. The script selects on that display name and prints
+**every** scoped bucket it finds, rather than hardcoding one — the sibling
+top-level keys in the same reply are rotating codenames (`nimbus_quill`,
+`seven_day_opus`, …), so a codename-based selector silently stops matching the
+day the bucket is renamed, and prints nothing where it used to print a number.
+
+☠️ **A scoped bucket sitting at `0%` proves the selector matched, not that the
+quota is being tracked.** Validate against a known positive before believing an
+empty or zero reading: hand the script a hand-written cache file with a non-zero
+percent, a reset instant, and a second bucket, and check that all of it renders.
+This is the same rule as any other saturated instrument reading.
+
+**Reset instants are printed as absolute local times, not as "time left".** `5h`
+gets `HH:MM`, the weekly ones `MM-DD HH:MM`. The API sends UTC; `date -d @epoch`
+converts. A countdown has to be re-read against a clock to be acted on, and it
+looks identical whether the window is about to reset or was read an hour ago.
+
 ## Configuration
 
 Nothing is hardcoded to one machine. All settings live in
