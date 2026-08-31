@@ -61,6 +61,76 @@ Then invoke with `/fp3-porting-debug`, `/fp3-kernel-test` or
 If you would rather not use plugins, copy or symlink the three directories under
 `plugins/fp3/skills/` into your own `~/.claude/skills/`.
 
+## The two hooks — what runs, when it fires, and how to drive it
+
+The plugin ships **hooks as well as skills**, declared in
+`plugins/fp3/hooks/hooks.json`. Installing the plugin activates them; a
+skills-only copy does not. They are small, and they exist because two failure
+modes recurred often enough to be worth automating away.
+
+### `autonomy.cjs` — the plan that survives a turn boundary
+
+A run's plan lives outside the conversation, so a compaction or a long
+measurement does not lose it, and the model does not end a turn with work still
+open. It hooks `UserPromptSubmit` (re-injects the plan) and `Stop` (blocks an
+early finish).
+
+```
+node autonomy.cjs start "<goal>"      begin a run
+node autonomy.cjs add "<step>" [...]  append steps
+node autonomy.cjs done <id> [note]    finished
+node autonomy.cjs drop <id> [why]     abandoned for good, with the reason
+node autonomy.cjs note <id> "<text>"  progress without finishing
+node autonomy.cjs wait <id> "<what>"  blocked on something OUTSIDE this session
+node autonomy.cjs show                print the plan
+node autonomy.cjs stop                end the run
+```
+
+☠️ **`wait` is the one that gets forgotten, and forgetting it has a specific
+cost.** A measurement window that must run its course, a build, a boot, an answer
+only the user can give — none of those is progress, and none is a reason to
+abandon a step. Marked `wait`, an item stays open and visible but stops holding
+the turn, and the Stop reminder goes quiet. Left unmarked, the reminder repeats,
+and the way to satisfy it is to *find something to do* — which on a
+measurement-heavy project means poking the device that a measurement needs left
+alone. Measured 2026-08-30: six turns of that, on a 30-minute window whose whole
+method was inaction, ending in a defect report about a feature the tool already
+had. Both advertised command lists had omitted `wait`; that is fixed, and the
+Stop reminder now names it explicitly.
+
+☠️ Anti-spin is not optional: the Stop hook blocks at most `MAX_BLOCKS` times
+without the plan changing, then says so and lets the turn end. A hook that always
+blocks is an infinite loop.
+
+### `measurement-watch.cjs` — a measurement and its watcher are one object
+
+Hooks `PostToolUse` on Bash and `Stop`. It notices a long-running unit started on
+the device (`systemd-run --unit=…`) with no watcher paired to it, and says so.
+
+☠️ The template it suggests needs **both** of its guards, each of which was
+learned by losing a run:
+
+* **wait for the unit to appear first.** `systemctl show -p ActiveState` answers
+  `inactive` for a unit that does not exist yet, so a watcher started in the same
+  breath as `systemd-run` exits on its first poll — measured 2026-08-30, where a
+  fetch returned 4 lines of a file that ended up 1634 lines long;
+* **end only on a definite finished state** (`inactive|failed`), never on "not in
+  the running set". An empty or errored reply means the device is unreachable,
+  which for a sleep measurement is exactly when it is working — measured the same
+  day, where a 90-minute run was reported finished 11 seconds in.
+
+### Two more, not part of the plugin
+
+`risky-target.cjs` and `precompact-status.cjs` live in the operator's own
+`~/.claude/hooks/`. The first warns before a destructive device action; the second
+writes a status snapshot before a compaction, so the next context window starts
+from a file rather than from a summary.
+
+☠️ Keep one copy of each. These hooks existed twice for a while — once here and
+once under `~/.claude/hooks/` — and both repository copies fell behind, hiding a
+fix in the one that was actually running. The live paths are symlinks into
+`plugins/fp3/hooks/` now.
+
 ## Configuration
 
 Nothing is hardcoded to one machine. All settings live in
