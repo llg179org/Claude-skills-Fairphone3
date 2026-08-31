@@ -88,6 +88,12 @@ previous boot, the source tree it was built from. This is the sentence that
 distinguishes a real check from one that compares an artifact to itself, and
 writing it out is usually enough to notice which one you just did.
 
+**2a. Every number you write down carries the CONDITIONS it was measured under — not just where it is recorded.** A citation that names a file is true and useless: the number really is in that file. What kills is a number measured correctly, recorded correctly, and then **moved into a regime where it was never measured**. So the label must name whatever separates this regime from its neighbours — awake or asleep, the daemon up or down, cable or battery, which slot, which boot, which base. ☠️ **A number that crosses a regime boundary is a new claim.** Re-measure it, or write "assumed constant across <X>, unchecked" next to it and treat the document as resting on that.
+
+☠️ **The case this cost.** A model fitted on *awake* windows gives `mA = 54.9 + 135.0 × MPSS-duty`, and this phone's duty was measured at 34.8 % — with the modem daemon **running**. A ten-hour sleeping-current run then measured a 48 mA floor, and a table in the write-up put "modem term 47.0 mA" in the *asleep* row. The agreement looked like a discovery and was a coincidence: that night ran with the daemon **stopped**, and stopped, the measured duty is 5.1 %, so the modem term was ~7 mA and 41 mA of the floor had no explanation at all. The duty had been *inferred from current* under an assumption about the sleeping AP, while the direct instrument takes **ten minutes**. Half a day of documents was built in that gap. The write-up even said, in those words, "that is not an inference".
+
+☠️ **And a caveat list is worth exactly what its omissions cost.** The same section carried a "what this does not say" list with three honest caveats, none of which was the load-bearing assumption. That is worse than writing no caveats: a thorough-looking list buys false confidence precisely where the real risk sits. When you write one, ask what a reader would have to know to reconstruct the number *from scratch in a different regime* — the gaps in that answer are the caveats that matter.
+
 **3. Reporting a check → print the command you ran.** One line, copy-pasteable,
 so the user can re-run it and so a reader can see whether it measures the claim.
 A check whose command is not shown is an assertion. The checks in
