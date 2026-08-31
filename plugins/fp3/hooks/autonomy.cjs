@@ -131,7 +131,7 @@ process.stdin.on('end', () => {
           hookEventName: 'UserPromptSubmit',
           additionalContext:
             `Autonomous run in progress — the plan carried across turns:\n${render(s)}\n` +
-            `Edit it with \`node "${__filename}" done|note|add|drop ...\`; \`stop\` ends the run.`,
+            `Edit it with \`node "${__filename}" done|note|wait|add|drop|show ...\`; \`stop\` ends the run.`,
         },
       }));
     }
@@ -199,9 +199,13 @@ process.stdin.on('end', () => {
         `continue with the next item now.\n\n${render(s)}\n\n` +
         `NEXT: ${open[0].id}. ${open[0].text}\n` +
         `Mark progress as you go: \`node "${__filename}" note ${open[0].id} "<what happened>"\`, ` +
-        `\`done ${open[0].id}\`, or \`add "<new step>"\` when the work reveals more. ` +
-        `If an item genuinely needs the user (a call to place, a cable to move), \`drop\` or ` +
-        `\`note\` it with the reason and move to the next one rather than ending the turn.`,
+        `\`done ${open[0].id}\`, or \`add "<new step>"\` when the work reveals more.\n` +
+        `☠️ If the item cannot be worked on right now — a measurement window that has to ` +
+        `run its course, a build, a boot, an answer only the user can give — mark it ` +
+        `\`wait ${open[0].id} "<what it waits for>"\`. It stays open and visible but stops ` +
+        `holding the turn, and this reminder stops repeating. Reaching for something to do ` +
+        `instead is how a measurement gets disturbed. Use \`drop\` only to abandon a step ` +
+        `for good.`,
     }));
     process.exit(0);
   }
