@@ -39,6 +39,15 @@
 //   UserPromptSubmit- the user spoke: reset the anti-spin counter and show the plan
 //   CLI             - how the model reads and edits the plan
 //
+// The third failure, measured 2026-09-01. An outside review (a Fable subagent)
+// had been asked for twice, both times by hand, at a moment the model happened
+// to think of it. The second one was therefore written WITHOUT the day's new
+// measurements in front of it, so it gave advice for a state that had already
+// moved - including a budget number that contradicted this run's own fitted
+// slope. Two things were missing and both are state, so both live here: WHEN a
+// review is due, and WHICH agent already carries the history.
+//   => `consulted`, and a Stop gate that asks for one.
+//
 // ☠️ ANTI-SPIN IS NOT OPTIONAL. A Stop hook that always blocks is an infinite
 // loop. This one blocks at most MAX_BLOCKS times without the plan changing; a
 // changed plan (an item finished, added, re-scoped, a fact recorded) resets the
@@ -64,6 +73,10 @@
 //                                             a claim that has been DISPROVEN.
 //                                             Never delete one: a deleted claim
 //                                             gets rediscovered
+//   node autonomy.cjs consulted <agent> [-- "<what it said>"]
+//                                             an OUTSIDE REVIEW happened. The agent name is
+//                                             the point: the next one goes to the SAME agent
+//                                             by SendMessage, so it keeps the history
 //   node autonomy.cjs status <path/to/STATUS.md>   where the resume block is written
 //   node autonomy.cjs watch <path>            a directory whose new contents mean
 //                                             "a result landed" (captures, logs)
@@ -94,6 +107,7 @@ const END = '<!-- FP3-AUTONOMY-RESUME:END -->';
 const empty = () => ({
   active: false, goal: '', items: [], nextId: 1, blocks: 0, lastHash: '',
   waitAnnounced: '', facts: [], statusFile: '', watch: [], lastRecordAt: 0,
+  consult: { agent: '', at: 0, atRecords: 0, note: '' }, consultAnnounced: false,
 });
 function read() {
   try { return Object.assign(empty(), JSON.parse(fs.readFileSync(FILE, 'utf8'))); }
@@ -219,6 +233,46 @@ function staleReasons(s) {
 }
 
 // ------------------------------------------------------- rendering
+// ------------------------------------------------------- outside review
+// A review is worth asking for when the picture has MOVED, so the trigger is
+// progress, not the clock - with a clock fallback so a slow stretch still gets
+// one. The agent NAME is the valuable half: a fresh general-purpose agent
+// starts blind, while the same one messaged again already knows the earlier
+// review and every retraction since.
+const CONSULT_EVERY = 6;   // results recorded between reviews
+const CONSULT_HOURS = 4;   // ...or this long, whichever comes first
+const records = (s) =>
+  s.facts.length + s.items.filter((i) => i.status === 'done' || i.status === 'dropped').length;
+function consultDue(s) {
+  if (!s.active) return '';
+  const c = s.consult || {};
+  if (!c.at) return 'no outside review has been recorded in this run yet';
+  const dn = records(s) - (c.atRecords || 0);
+  if (dn >= CONSULT_EVERY) return `${dn} results have been recorded since the last review`;
+  const dh = (Date.now() - c.at) / 36e5;
+  if (dh >= CONSULT_HOURS) return `${dh.toFixed(1)} h since the last review`;
+  return '';
+}
+function consultCall(s) {
+  const c = s.consult || {};
+  return c.agent
+    ? `SendMessage({to: "${c.agent}", message: "<what changed since your last review: the new ` +
+      `measurements, anything retracted, and the open questions>"})\n` +
+      `  ← the SAME agent on purpose, so it still carries the earlier review.`
+    : `Agent({subagent_type: "general-purpose", model: "fable", description: "Fable review",\n` +
+      `        prompt: "<self-contained: the goal, what is measured, what was retracted, the ` +
+      `open questions, and the repo paths to read>"})\n` +
+      `  ☠️ NOT subagent_type "fork" — a fork always runs on the parent's model and ignores the ` +
+      `model override, so it would be reviewing its own work.`;
+}
+function renderConsult(s) {
+  const c = s.consult || {};
+  if (!c.at) return 'OUTSIDE REVIEW: none recorded in this run.';
+  const ago = ((Date.now() - c.at) / 36e5).toFixed(1);
+  return `OUTSIDE REVIEW: last ${ago} h ago${c.agent ? ` by agent ${c.agent}` : ''}, ` +
+    `${records(s) - (c.atRecords || 0)} result(s) recorded since.` + (c.note ? `\n  · ${c.note}` : '');
+}
+
 function render(s) {
   if (!s.active) return 'No autonomous run is active.';
   const line = (i) => {
@@ -275,6 +329,7 @@ function resumeBlock(s, stampIso) {
   ];
   const facts = renderFacts(s);
   if (facts) parts.push('```', facts, '```', '');
+  parts.push('```', renderConsult(s), '```', '');
   const stale = staleReasons(s);
   if (stale.length) {
     parts.push('**☠️ Results have landed that the plan does not mention yet:**', '');
@@ -341,6 +396,16 @@ if (argv.length) {
       if (!s.watch.includes(arg)) s.watch.push(arg);
       break;
     }
+    case 'consulted': {
+      const agent = head.join(' ').trim();
+      if (!agent) fail('usage: consulted <agent-name-or-id> [-- "<what the review said>"]\n' +
+        '☠️ The name is the point: the next review goes to the SAME agent by SendMessage so it ' +
+        'keeps the history. A fresh agent starts blind and gives advice for a state that has moved.\n' +
+        'If a review could not help right now, say so: consulted none -- "<why>".');
+      s.consult = { agent, at: Date.now(), atRecords: records(s), note: tail.join(' ').trim() };
+      s.consultAnnounced = false;
+      break;
+    }
     case 'measured': case 'retracted': {
       const text = tail.join(' ').trim();
       if (cmd === 'measured') {
@@ -389,7 +454,7 @@ if (argv.length) {
     case 'flush': case 'show':
       break;
     default:
-      console.error('usage: start|add|note|wait|done|drop|measured|retracted|status|watch|flush|show|stop');
+      console.error('usage: start|add|note|wait|done|drop|measured|retracted|consulted|status|watch|flush|show|stop');
       process.exit(2);
   }
   if (cmd !== 'show') {
@@ -401,6 +466,7 @@ if (argv.length) {
   console.log(render(s));
   const facts = renderFacts(s);
   if (facts) console.log(facts);
+  console.log(renderConsult(s));
   if (cmd !== 'show') {
     const w = flushStatus(s);
     if (w) console.log(`resume block written: ${w}`);
@@ -437,6 +503,7 @@ process.stdin.on('end', () => {
       `Autonomous run is ACTIVE (session source: ${src}). The plan and findings carried across ` +
       `the break:\n${render(s)}\n` +
       (facts ? `\n${facts}\n` : '') +
+      `\n${renderConsult(s)}\n` +
       (stale.length ? `\n☠️ Results landed that the plan does not mention:\n  - ${stale.join('\n  - ')}\n` : '') +
       (s.statusFile ? `\nThe same block is in ${s.statusFile} between the FP3-AUTONOMY-RESUME markers.\n` : '') +
       (lp && src === 'compact' ? `Pre-compaction transcript snapshot: ${lp}\n` : '') +
@@ -453,6 +520,7 @@ process.stdin.on('end', () => {
       emit('UserPromptSubmit',
         `Autonomous run in progress — the plan carried across turns:\n${render(s)}\n` +
         (facts ? `\n${facts}\n` : '') +
+        `\n${renderConsult(s)}\n` +
         `Edit it with \`node "${__filename}" done|note|wait|add|drop|measured|retracted|show ...\`; ` +
         `\`stop\` ends the run.`);
     }
@@ -484,6 +552,31 @@ process.stdin.on('end', () => {
           `  \`node "${__filename}" note <id> "<what happened>"\`, or commit the docs.\n` +
           `Any of those clears this. If the files are genuinely nothing to record — scratch ` +
           `output, a half-written page — commit or remove them and say so.`,
+      }));
+      process.exit(0);
+    }
+
+    // Outside review. It SHARES the anti-spin budget - a second budget is a
+    // second way to spin - and fires at most once per due-window: recording the
+    // review clears it, and so does running out of budget.
+    const due = consultDue(s);
+    if (!due && s.consultAnnounced) { s.consultAnnounced = false; write(s); }
+    if (due && !s.consultAnnounced && s.blocks < MAX_BLOCKS) {
+      s.blocks += 1; s.consultAnnounced = true; write(s); flushStatus(s);
+      process.stdout.write(JSON.stringify({
+        decision: 'block',
+        reason:
+          `An outside review is due — ${due}.\n\n` +
+          `Ask for one now, and put the CURRENT data in the prompt. ☠️ A review written against ` +
+          `a state that has already moved answers that older state; that has already happened ` +
+          `once in this run.\n\n  ${consultCall(s)}\n\n` +
+          `Then record it — this does not clear until you do:\n` +
+          `  \`node "${__filename}" consulted <agent-name> -- "<the headline findings>"\`\n` +
+          `and turn what survives into plan items (\`add\`) or standing facts (\`measured\`). ` +
+          `☠️ Check its numbers against this run's own measurements before adopting them — a ` +
+          `review can be arithmetically wrong, and one in this run was.\n` +
+          `Relay to the user what the review actually said; its report is not shown to them.\n` +
+          `If a review genuinely cannot help right now, say why: \`consulted none -- "<why>"\`.`,
       }));
       process.exit(0);
     }
