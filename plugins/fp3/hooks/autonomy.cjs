@@ -74,9 +74,13 @@
 //                                             Never delete one: a deleted claim
 //                                             gets rediscovered
 //   node autonomy.cjs consulted <agent> [-- "<what it said>"]
-//                                             an OUTSIDE REVIEW happened. The agent name is
-//                                             the point: the next one goes to the SAME agent
-//                                             by SendMessage, so it keeps the history
+//                                             an OUTSIDE REVIEW was ASKED FOR. Record it when
+//                                             you LAUNCH it, not when it answers - otherwise the
+//                                             gate fires again while one is in flight, and a
+//                                             crash loses the only handle you had. Record it a
+//                                             second time with the findings when it returns.
+//                                             The agent name is the point: the next one goes to
+//                                             the SAME agent by SendMessage, so it keeps history
 //   node autonomy.cjs status <path/to/STATUS.md>   where the resume block is written
 //   node autonomy.cjs watch <path>            a directory whose new contents mean
 //                                             "a result landed" (captures, logs)
@@ -265,11 +269,15 @@ function consultCall(s) {
       `  ☠️ NOT subagent_type "fork" — a fork always runs on the parent's model and ignores the ` +
       `model override, so it would be reviewing its own work.`;
 }
-function renderConsult(s) {
+// ☠️ `published` drops the agent handle. It is a session-local id that is dead
+// tomorrow, and the resume block is written into a public repository - so it
+// would be permanent noise there and useful nowhere. The local state keeps it.
+function renderConsult(s, published) {
   const c = s.consult || {};
   if (!c.at) return 'OUTSIDE REVIEW: none recorded in this run.';
   const ago = ((Date.now() - c.at) / 36e5).toFixed(1);
-  return `OUTSIDE REVIEW: last ${ago} h ago${c.agent ? ` by agent ${c.agent}` : ''}, ` +
+  const who = c.agent && !published ? ` by agent ${c.agent}` : '';
+  return `OUTSIDE REVIEW: last ${ago} h ago${who}, ` +
     `${records(s) - (c.atRecords || 0)} result(s) recorded since.` + (c.note ? `\n  · ${c.note}` : '');
 }
 
@@ -329,7 +337,7 @@ function resumeBlock(s, stampIso) {
   ];
   const facts = renderFacts(s);
   if (facts) parts.push('```', facts, '```', '');
-  parts.push('```', renderConsult(s), '```', '');
+  parts.push('```', renderConsult(s, true), '```', '');
   const stale = staleReasons(s);
   if (stale.length) {
     parts.push('**☠️ Results have landed that the plan does not mention yet:**', '');
@@ -399,6 +407,7 @@ if (argv.length) {
     case 'consulted': {
       const agent = head.join(' ').trim();
       if (!agent) fail('usage: consulted <agent-name-or-id> [-- "<what the review said>"]\n' +
+        'Record it when you LAUNCH the review (note "in flight"), then again with the findings.\n' +
         '☠️ The name is the point: the next review goes to the SAME agent by SendMessage so it ' +
         'keeps the history. A fresh agent starts blind and gives advice for a state that has moved.\n' +
         'If a review could not help right now, say so: consulted none -- "<why>".');
