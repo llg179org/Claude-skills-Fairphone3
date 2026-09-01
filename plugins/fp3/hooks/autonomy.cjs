@@ -277,8 +277,9 @@ function renderConsult(s, published) {
   if (!c.at) return 'OUTSIDE REVIEW: none recorded in this run.';
   const ago = ((Date.now() - c.at) / 36e5).toFixed(1);
   const who = c.agent && !published ? ` by agent ${c.agent}` : '';
+  const note = published ? c.note : clip(c.note, 400);
   return `OUTSIDE REVIEW: last ${ago} h ago${who}, ` +
-    `${records(s) - (c.atRecords || 0)} result(s) recorded since.` + (c.note ? `\n  · ${c.note}` : '');
+    `${records(s) - (c.atRecords || 0)} result(s) recorded since.` + (note ? `\n  · ${note}` : '');
 }
 
 function render(s) {
@@ -290,7 +291,59 @@ function render(s) {
   };
   return [`GOAL: ${s.goal}`, ...s.items.map(line)].join('\n');
 }
-function renderFacts(s) {
+// ☠️ THE PLAN IS NOT THE REMINDER. render() prints every item with every note,
+// which is right for the durable record in STATUS.md and for `show` - and wrong
+// for a hook that fires on every turn: at 59 items it was 75 KB of mostly
+// finished work, re-read each turn, with the one line that mattered buried in
+// it. A reminder nobody can skim is a reminder nobody reads. renderPlan() is
+// what the hooks emit: actionable items in full, waiting items in one line,
+// finished items as a count.
+//
+// ☠️ AND PRIORITY WAS IMPLICIT. The stars live in the item text, but the plan
+// was ordered - and NEXT was picked - by id, i.e. by the order steps happened to
+// be written down. Rank by stars, break ties by id, and say the rank out loud.
+const prio = (i) => (String(i.text).match(/★/g) || []).length;
+const byPrio = (a, b) => prio(b) - prio(a) || a.id - b.id;
+function clip(t, n) {
+  t = String(t == null ? '' : t).replace(/\s+/g, ' ').trim();
+  return t.length > n ? `${t.slice(0, n - 1)}…` : t;
+}
+function nextItem(open) { return [...open].sort(byPrio)[0]; }
+
+function renderPlan(s) {
+  if (!s.active) return 'No autonomous run is active.';
+  const open = s.items.filter((i) => i.status === 'todo' || i.status === 'doing');
+  const waiting = s.items.filter((i) => i.status === 'waiting');
+  const done = s.items.filter((i) => i.status === 'done').length;
+  const dropped = s.items.filter((i) => i.status === 'dropped').length;
+  const out = [
+    `GOAL: ${s.goal}`,
+    `${done} done · ${dropped} dropped · ${open.length} actionable · ${waiting.length} waiting` +
+      `   (every item, with notes: \`node "${__filename}" show\`)`,
+  ];
+  if (open.length) {
+    out.push('', 'ACTIONABLE — highest priority first, act on the top one:');
+    for (const i of [...open].sort(byPrio)) {
+      out.push(`  ${i.status === 'doing' ? '[~]' : '[ ]'} ${i.id}. ${i.text}` +
+        (i.ev ? `  ⟨${i.ev}⟩` : '') + (i.note ? `\n        · ${i.note}` : ''));
+    }
+  }
+  if (waiting.length) {
+    out.push('', 'WAITING — nothing to do on these; do not disturb what they measure:');
+    for (const i of [...waiting].sort(byPrio)) {
+      out.push(`  … ${i.id}. ${clip(i.text, 100)}\n        ⟵ ${clip(i.note, 100) || 'reason unstated'}`);
+    }
+  }
+  return out.join('\n');
+}
+
+// ☠️ SAME LESSON, SECOND HALF. Trimming the plan left the fact list as the bulk:
+// 23 KB of measured claims plus their witnesses, re-emitted on every turn. The
+// witness belongs in the durable record (STATUS.md keeps it, `show` prints it) -
+// what a turn-by-turn reminder needs is the CLAIM, so it is not contradicted or
+// re-derived. The retractions keep more of their reason than the measurements do,
+// because their whole job is to stop the reader rebuilding on a dead claim.
+function renderFacts(s, compact) {
   const m = s.facts.filter((f) => f.kind === 'measured');
   const r = s.facts.filter((f) => f.kind === 'retracted');
   const out = [];
@@ -298,12 +351,16 @@ function renderFacts(s) {
     out.push('MEASURED and standing:');
     for (const f of m) {
       const flag = String(f.ev || '').startsWith('unverifiable:') ? ' ☠️ UNVERIFIED' : '';
-      out.push(`  · ${f.text}${flag}\n      witness: ${f.ev}`);
+      out.push(compact ? `  · ${clip(f.text, 200)}${flag}`
+                       : `  · ${f.text}${flag}\n      witness: ${f.ev}`);
     }
   }
   if (r.length) {
     out.push('☠️ RETRACTED — do not rebuild on these:');
-    for (const f of r) out.push(`  · ${f.text}\n      fell because: ${f.ev}`);
+    for (const f of r) {
+      out.push(compact ? `  · ${clip(f.text, 200)}\n      fell because: ${clip(f.ev, 140)}`
+                       : `  · ${f.text}\n      fell because: ${f.ev}`);
+    }
   }
   return out.join('\n');
 }
@@ -349,7 +406,13 @@ function resumeBlock(s, stampIso) {
   parts.push(END);
   return parts.join('\n');
 }
+// ☠️ A DRY RUN THAT WRITES IS NOT A DRY RUN. Exercising the hook against a COPY
+// of the state (CLAUDE_STATE_DIR=/tmp/...) still wrote the real STATUS.md,
+// because the path travels inside the state, not beside it - so a test with two
+// deliberately fake items published them to the repo. Set FP3_AUTONOMY_NO_WRITE=1
+// to render without publishing.
 function flushStatus(s) {
+  if (process.env.FP3_AUTONOMY_NO_WRITE) return '';
   if (!s.statusFile) return '';
   const f = s.statusFile;
   let text;
@@ -510,7 +573,7 @@ process.stdin.on('end', () => {
     const stale = staleReasons(s);
     emit('SessionStart',
       `Autonomous run is ACTIVE (session source: ${src}). The plan and findings carried across ` +
-      `the break:\n${render(s)}\n` +
+      `the break:\n${renderPlan(s)}\n` +
       (facts ? `\n${facts}\n` : '') +
       `\n${renderConsult(s)}\n` +
       (stale.length ? `\n☠️ Results landed that the plan does not mention:\n  - ${stale.join('\n  - ')}\n` : '') +
@@ -525,9 +588,9 @@ process.stdin.on('end', () => {
     // the user spoke: they can always redirect, so give the budget back
     if (s.active) {
       s.blocks = 0; write(s);
-      const facts = renderFacts(s);
+      const facts = renderFacts(s, true);
       emit('UserPromptSubmit',
-        `Autonomous run in progress — the plan carried across turns:\n${render(s)}\n` +
+        `Autonomous run in progress — the plan carried across turns:\n${renderPlan(s)}\n` +
         (facts ? `\n${facts}\n` : '') +
         `\n${renderConsult(s)}\n` +
         `Edit it with \`node "${__filename}" done|note|wait|add|drop|measured|retracted|show ...\`; ` +
@@ -602,7 +665,9 @@ process.stdin.on('end', () => {
       s.waitAnnounced = wsig; write(s); flushStatus(s);
       emit('Stop',
         `Every actionable item is done; ${waiting.length} item(s) are waiting on something ` +
-        `outside this session:\n` + waiting.map((i) => `  … ${i.id}. ${i.text}${i.note ? ` (${i.note})` : ''}`).join('\n') +
+        `outside this session:\n` +
+        [...waiting].sort(byPrio).map((i) =>
+          `  … ${i.id}. ${clip(i.text, 90)}\n        ⟵ ${clip(i.note, 90) || 'reason unstated'}`).join('\n') +
         `\nNot blocking - there is nothing to do until those return. Say plainly what is ` +
         `being waited on and roughly when, then stop.`);
       process.exit(0);
@@ -619,25 +684,23 @@ process.stdin.on('end', () => {
       emit('Stop',
         `☠️ The autonomous plan has not changed across ${MAX_BLOCKS} turns while ` +
         `${open.length} item(s) are still open. Not blocking again — that would spin. ` +
-        `Tell the user plainly what is blocking item ${open[0].id} ("${open[0].text}") ` +
+        `Tell the user plainly what is blocking item ${nextItem(open).id} ` +
+        `("${clip(nextItem(open).text, 120)}") ` +
         `and what you need from them.`);
       process.exit(0);
     }
+    const nx = nextItem(open);
     s.blocks += 1; write(s); flushStatus(s);
     process.stdout.write(JSON.stringify({
       decision: 'block',
       reason:
         `Autonomous run is active and the plan still has open work. Do not stop to ask — ` +
-        `continue with the next item now.\n\n${render(s)}\n\n` +
-        `NEXT: ${open[0].id}. ${open[0].text}\n` +
-        `Mark progress as you go: \`node "${__filename}" note ${open[0].id} "<what happened>"\`, ` +
-        `\`done ${open[0].id} <evidence>\`, or \`add "<new step>"\` when the work reveals more.\n` +
-        `☠️ If the item cannot be worked on right now — a measurement window that has to ` +
-        `run its course, a build, a boot, an answer only the user can give — mark it ` +
-        `\`wait ${open[0].id} "<what it waits for>"\`. It stays open and visible but stops ` +
-        `holding the turn, and this reminder stops repeating. Reaching for something to do ` +
-        `instead is how a measurement gets disturbed. Use \`drop\` only to abandon a step ` +
-        `for good.`,
+        `continue with the next item now.\n\n${renderPlan(s)}\n\n` +
+        `NEXT (highest priority open item): ${nx.id}. ${clip(nx.text, 160)}\n` +
+        `  \`node "${__filename}" note|done|wait|add ...\` — and \`wait ${nx.id} "<what for>"\` ` +
+        `if it cannot be worked on right now (a window that must run its course, a build, a ` +
+        `boot, an answer only the user can give). Reaching for something else instead is how ` +
+        `a measurement gets disturbed.`,
     }));
     process.exit(0);
   }
