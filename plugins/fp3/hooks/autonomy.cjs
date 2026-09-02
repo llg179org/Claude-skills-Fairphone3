@@ -1284,6 +1284,45 @@ process.stdin.on('end', () => {
     // someone going around that door.
     const RAW_LAUNCH = /\b(systemd-run|nohup|setsid)\b/;
     const TO_DEVICE = /\b(ssh\s|scp\s|fp3[:\s]|172\.16\.42\.1|192\.168\.100\.17)/;
+    // ☠️ AN SSH LOGIN IS AN AP WAKE, AND I HAVE SPOILED TWO MEASUREMENTS WITH ONE.
+    // A rehearsal leg came back with a 9 s median sleep against a 90 s alarm - 28
+    // samples instead of 4, of which the gate kept ONE - because this session
+    // ssh'd and pinged the phone in the middle of it to answer a question about
+    // the reboot. Earlier the same day, polling ssh's during the owner's call test
+    // woke the phone between calls. Both times the rule was known and written down
+    // in prose; prose is not a gate.
+    //
+    // fp3-measure records what it launched and when it is due. Until then, a
+    // command that touches the phone is refused - because the answer during a
+    // measurement is "the phone is measuring, I will look at HH:MM", not a quick
+    // ssh. Reading the result afterwards costs nothing; reading it during costs
+    // the measurement.
+    const MEASURING = path.join(DIR, 'fp3-measuring.json');
+    let meas = null;
+    try { meas = JSON.parse(fs.readFileSync(MEASURING, 'utf8')); } catch { /* none */ }
+    const PROBE = /\b(ssh\s|scp\s|ping\s|172\.16\.42\.1|192\.168\.100\.17)/;
+    if (meas && meas.until > Date.now() && PROBE.test(cmd)
+        && !/fp3-measure|FP3_TOUCH_ANYWAY/.test(cmd)) {
+      logGate(s, 'touching-a-running-measurement'); write(s);
+      const mins = Math.ceil((meas.until - Date.now()) / 6e4);
+      process.stdout.write(JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'deny',
+          permissionDecisionReason:
+            `A measurement is running on the phone (${meas.unit || 'unnamed'}), due in ${mins} min.\n\n` +
+            `☠️ AN SSH LOGIN IS AN AP WAKE. This session has already spoiled two measurements ` +
+            `this way: a rehearsal leg woke every 9 s against a 90 s alarm because of one ` +
+            `"let me just check" ssh, and the owner's call test was woken between calls by ` +
+            `polling. Both times the rule existed - in prose.\n\n` +
+            `Wait for it. If somebody asks what the phone is doing, the answer is "it is ` +
+            `measuring, I will look at ${new Date(meas.until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}" - not a quick ssh.\n` +
+            `If this genuinely cannot wait, put FP3_TOUCH_ANYWAY=1 in the command and say in ` +
+            `your reply that the measurement is now contaminated.`,
+        },
+      }));
+      process.exit(0);
+    }
     if (s.active && RAW_LAUNCH.test(cmd) && TO_DEVICE.test(cmd) && !/fp3-measure/.test(cmd)) {
       logGate(s, 'wrapper-bypass'); write(s);
       process.stdout.write(JSON.stringify({
