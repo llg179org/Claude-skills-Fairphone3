@@ -518,6 +518,36 @@ function clip(t, n) {
 }
 function nextItem(open) { return [...open].sort(byPrio)[0]; }
 
+// ☠️ EVERY GATE HERE POINTS AT AN INCIDENT; NONE OF THEM CAN SAY WHETHER IT HAS
+// CAUGHT ANYTHING SINCE. A gate that fires often and rightly earns its cost; one
+// that has not fired in weeks is either a perfect deterrent or dead weight, and
+// only a log tells those apart. The same doctrine this project applies to its
+// instruments - a verifier not yet shown failing has proved nothing - applies to
+// its rules. `gates` prints the tally, so REMOVING a gate stays as cheap an
+// operation as adding one.
+function logGate(s, name) {
+  s.gateLog = (s.gateLog || []).concat([{ t: Date.now(), g: name }]).slice(-500);
+  s.gateFirst = s.gateFirst || {};
+  if (!s.gateFirst[name]) s.gateFirst[name] = Date.now();
+}
+function renderGates(s) {
+  const log = s.gateLog || [];
+  const first = s.gateFirst || {};
+  const names = [...new Set(Object.keys(first).concat(log.map((e) => e.g)))].sort();
+  if (!names.length) return 'No gate has fired yet in this run.';
+  const out = ['GATE LOG — a gate that never fires is either a perfect deterrent or dead weight:'];
+  for (const n of names) {
+    const hits = log.filter((e) => e.g === n);
+    const days = ((Date.now() - (first[n] || Date.now())) / 864e5).toFixed(1);
+    const last = hits.length ? `${((Date.now() - hits[hits.length - 1].t) / 36e5).toFixed(1)} h ago` : 'never';
+    const flag = hits.length === 0 ? '   ← never caught anything: keep it or drop it, deliberately' : '';
+    out.push(`  ${n.padEnd(22)} ${String(hits.length).padStart(4)} fires   last ${last.padEnd(12)} armed ${days} d${flag}`);
+  }
+  out.push('☠️ Overrides are gates failing loudly rather than silently: count `claim --force` and');
+  out.push('   `consulted none` here too. A gate overridden more often than obeyed is mistuned.');
+  return out.join('\n');
+}
+
 function renderPlan(s) {
   if (!s.active) return 'No autonomous run is active.';
   const open = s.items.filter((i) => i.status === 'todo' || i.status === 'doing');
@@ -668,20 +698,22 @@ if (argv.length) {
   // ☠️ READS ARE ALWAYS FINE; WRITES BELONG TO THE OWNER. A second session may
   // look at the plan - that is how it learns it should not touch it - but a
   // mutation from elsewhere is the failure this lock exists for.
-  const READONLY = new Set(['show', 'flush', 'status', 'claim']);
+  const READONLY = new Set(['show', 'flush', 'status', 'claim', 'gates']);
+  if (cmd === 'gates') { console.log(renderGates(s)); process.exit(0); }
   if (cmd === 'claim') {
     const m = me();
     if (rest[0] !== '--force' && ownershipBlock(s)) fail(ownershipBlock(s));
     s.owner = Object.assign({}, m, { at: Date.now(), seen: Date.now(),
       forced: rest[0] === '--force' ? (s.owner || {}).sid || 'nobody' : undefined });
     write(s);
+    if (rest[0] === '--force') { logGate(s, 'OVERRIDE:claim-force'); write(s); }
     console.log(`run claimed by session ${m.sid} (pid ${m.pid} on ${m.host})` +
       (rest[0] === '--force' ? ' — FORCED; the previous owner will be told it lost the run' : ''));
     process.exit(0);
   }
   if (!READONLY.has(cmd)) {
     const blocked = ownershipBlock(s);
-    if (blocked) fail(`REFUSED: ${blocked}`);
+    if (blocked) { logGate(s, 'foreign-session'); write(s); fail(`REFUSED: ${blocked}`); }
   }
 
   switch (cmd) {
@@ -750,6 +782,7 @@ if (argv.length) {
         '☠️ The name is the point: the next review goes to the SAME agent by SendMessage so it ' +
         'keeps the history. A fresh agent starts blind and gives advice for a state that has moved.\n' +
         'If a review could not help right now, say so: consulted none -- "<why>".');
+      if (agent === 'none') logGate(s, 'OVERRIDE:consulted-none');
       s.consult = { agent, at: Date.now(), atRecords: records(s), note: tail.join(' ').trim(), pendingAt: 0 };
       s.consultAnnounced = false;
       break;
@@ -894,6 +927,7 @@ process.stdin.on('end', () => {
     const RAW_LAUNCH = /\b(systemd-run|nohup|setsid)\b/;
     const TO_DEVICE = /\b(ssh\s|scp\s|fp3[:\s]|172\.16\.42\.1|192\.168\.100\.17)/;
     if (s.active && RAW_LAUNCH.test(cmd) && TO_DEVICE.test(cmd) && !/fp3-measure/.test(cmd)) {
+      logGate(s, 'wrapper-bypass'); write(s);
       process.stdout.write(JSON.stringify({
         hookSpecificOutput: {
           hookEventName: 'PreToolUse',
@@ -972,7 +1006,7 @@ process.stdin.on('end', () => {
     // precisely the state an auto-compaction turns into lost work.
     const stale = staleReasons(s);
     if (stale.length && s.blocks < MAX_BLOCKS) {
-      s.blocks += 1; write(s); flushStatus(s);
+      s.blocks += 1; logGate(s, 'unrecorded-result'); write(s); flushStatus(s);
       process.stdout.write(JSON.stringify({
         decision: 'block',
         reason:
@@ -994,7 +1028,7 @@ process.stdin.on('end', () => {
     const due = consultDue(s);
     if (!due && s.consultAnnounced) { s.consultAnnounced = false; write(s); }
     if (due && !s.consultAnnounced && s.blocks < MAX_BLOCKS) {
-      s.blocks += 1; s.consultAnnounced = true; write(s); flushStatus(s);
+      s.blocks += 1; s.consultAnnounced = true; logGate(s, 'review-due'); write(s); flushStatus(s);
       if (due.startsWith('PENDING:')) {
         // ☠️ CHASE THE ONE THAT IS OUT; DO NOT START ANOTHER. A second reviewer
         // asked the same question duplicates the work and, worse, answers a
@@ -1071,7 +1105,7 @@ process.stdin.on('end', () => {
       process.exit(0);
     }
     const nx = nextItem(open);
-    s.blocks += 1; write(s); flushStatus(s);
+    s.blocks += 1; logGate(s, 'open-work'); write(s); flushStatus(s);
     process.stdout.write(JSON.stringify({
       decision: 'block',
       reason:
