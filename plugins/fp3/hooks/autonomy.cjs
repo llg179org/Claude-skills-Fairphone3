@@ -118,9 +118,41 @@ function read() {
   try { return Object.assign(empty(), JSON.parse(fs.readFileSync(FILE, 'utf8'))); }
   catch { return empty(); }
 }
+// ☠️ ATOMIC, BECAUSE A TORN STATE FILE LOSES THE RUN. write-then-rename means a
+// reader never sees a half-written plan, however the process dies mid-write.
 function write(s) {
-  try { fs.mkdirSync(DIR, { recursive: true }); fs.writeFileSync(FILE, JSON.stringify(s, null, 1)); }
-  catch { /* bookkeeping must never break the session */ }
+  try {
+    fs.mkdirSync(DIR, { recursive: true });
+    const tmp = `${FILE}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(s, null, 1));
+    fs.renameSync(tmp, FILE);
+  } catch { /* bookkeeping must never break the session */ }
+}
+
+// ☠️ THE LIVENESS TEST DOES NOT SERIALISE. Two hooks can read the file at the
+// same moment, both find the owner dead, and both take over "loudly" - after
+// which the second write silently discards the first. The lock is what makes
+// read-decide-write one step. It is deliberately forgiving: if it cannot be
+// taken, the work proceeds unserialised rather than failing, because
+// bookkeeping must never break the session - but a stale lock is cleared, so a
+// process killed mid-update cannot wedge the next one.
+const LOCK = `${FILE}.lock`;
+function withLock(fn) {
+  let fd = null;
+  for (let i = 0; i < 60; i++) {
+    try { fd = fs.openSync(LOCK, 'wx'); break; }
+    catch {
+      try {
+        const age = Date.now() - fs.statSync(LOCK).mtimeMs;
+        if (age > 30000) fs.unlinkSync(LOCK);
+      } catch { /* it went away on its own */ }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    }
+  }
+  try { return fn(); }
+  finally {
+    if (fd !== null) { try { fs.closeSync(fd); fs.unlinkSync(LOCK); } catch { /* ignore */ } }
+  }
 }
 // ☠️ ONE RUN, ONE SESSION. This plan drives a single phone: two sessions editing
 // it means two sets of hands on one device, and it has happened - a second
@@ -135,10 +167,33 @@ function write(s) {
 // free to take. Across machines a pid means nothing, so the hostname is recorded
 // and a foreign host falls back to a staleness window.
 const OWNER_STALE_MIN = 45;
+// ☠️ A PID ALONE IS NOT AN IDENTITY. pid_max on this machine is 4194304, so
+// wrap-around is slow - but when it happens the failure is the ugly direction:
+// the lock believes a recycled pid is the old owner FOREVER, and the
+// dead-owner takeover never fires. Worse, if the recycled pid belongs to another
+// user, the EPERM branch confirms it as "alive under another user". The identity
+// is therefore (pid, start time, boot id): the start time comes from field 22 of
+// /proc/PID/stat and cannot be forged by reuse, and the boot id stops a match
+// surviving a reboot.
+function starttime(pid) {
+  try {
+    const st = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+    // the comm field can contain spaces and parentheses; fields are counted
+    // after the last ')' precisely because of that.
+    return Number(st.slice(st.lastIndexOf(')') + 2).split(' ')[19]) || 0;
+  } catch { return 0; }
+}
+function bootId() {
+  try { return fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim(); }
+  catch { return ''; }
+}
 function me() {
+  const pid = Number(process.env.CLAUDE_PID) || 0;
   return {
     sid: process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || '',
-    pid: Number(process.env.CLAUDE_PID) || 0,
+    pid,
+    start: starttime(pid),
+    boot: bootId(),
     host: os.hostname(),
   };
 }
@@ -147,8 +202,20 @@ function alive(o) {
   if (o.host && o.host !== os.hostname()) {
     return o.seen && (Date.now() - o.seen) / 6e4 < OWNER_STALE_MIN;   // cannot test a remote pid
   }
-  try { process.kill(o.pid, 0); return true; }
-  catch (e) { return e.code === 'EPERM'; }
+  if (o.boot && o.boot !== bootId()) return false;   // different boot: the pid means nothing
+  // ☠️ Measured in this setup before being relied on: kill(own pid, 0) succeeds
+  // and kill(999999, 0) gives ESRCH, so no PID-namespace artefact is turning a
+  // live process into a dead one here. A sandbox elsewhere could; re-measure
+  // before trusting this on another machine.
+  try { process.kill(o.pid, 0); }
+  catch (e) { if (e.code !== 'EPERM') return false; }
+  // The pid exists - but is it the SAME process? A recycled pid has a different
+  // start time, and that is the whole point of recording it.
+  if (o.start) {
+    const now = starttime(o.pid);
+    if (now && now !== o.start) return false;
+  }
+  return true;
 }
 // Returns '' when this session may proceed, or a sentence saying why not.
 function ownershipBlock(s) {
@@ -156,7 +223,23 @@ function ownershipBlock(s) {
   const o = s.owner;
   if (!m.sid) return '';                       // no identity to enforce with
   if (!o || !o.sid) { s.owner = Object.assign({}, m, { at: Date.now(), seen: Date.now() }); return ''; }
-  if (o.sid === m.sid) { o.seen = Date.now(); o.pid = m.pid || o.pid; return ''; }
+  if (o.sid === m.sid) {
+    // ☠️ THE SAME SESSION ID IS NOT THE SAME WINDOW. `claude --resume <sid>` in a
+    // second terminal carries the same sid while the original is still running,
+    // which is exactly the incident this lock exists for. So: same sid and the
+    // old process gone = a genuine resume, inherit it; same sid and the old
+    // process alive = two windows, refuse as loudly as for any stranger.
+    if (!m.pid || o.pid === m.pid || !alive(o)) {
+      Object.assign(o, { seen: Date.now(), pid: m.pid || o.pid, start: m.start || o.start,
+                         boot: m.boot || o.boot });
+      return '';
+    }
+    return `This run is already held by another window of the SAME session ` +
+      `(pid ${o.pid}, still alive; you are pid ${m.pid}).\n` +
+      `☠️ A second \`claude --resume\` does not inherit the run - it duplicates the hands on ` +
+      `the phone.\nClose or finish that window, or take it over deliberately: ` +
+      `node "${__filename}" claim --force`;
+  }
   if (alive(o)) {
     return `This autonomous run belongs to another session that is still running ` +
       `(pid ${o.pid} on ${o.host}, last seen ${((Date.now() - (o.seen || o.at)) / 6e4).toFixed(0)} min ago).\n` +
@@ -165,6 +248,20 @@ function ownershipBlock(s) {
       `Go back to it:  claude --resume ${o.sid}\n` +
       `If that session is genuinely finished with the run and you know it, take it over ` +
       `deliberately:  node "${__filename}" claim --force`;
+  }
+  // ☠️ THE TAKEOVER RE-READS UNDER THE LOCK. Deciding on a copy read before the
+  // lock is check-then-act: two sessions could both find the owner dead and both
+  // announce a takeover, and the later write would discard the earlier silently.
+  const fresh = withLock(() => {
+    const cur = read();
+    if (cur.owner && cur.owner.sid && cur.owner.sid !== o.sid) return cur.owner;  // someone got there first
+    cur.owner = Object.assign({}, m, { at: Date.now(), seen: Date.now(), tookOverFrom: o.sid });
+    write(cur);
+    return null;
+  });
+  if (fresh && fresh.sid !== m.sid) {
+    return `Another session took this run over while you were deciding to ` +
+      `(now ${fresh.sid}, pid ${fresh.pid}). Do not race it.`;
   }
   // The owner is gone. Take over, but say so - a silent handover hides the fact
   // that whatever it was measuring may have died with it.
