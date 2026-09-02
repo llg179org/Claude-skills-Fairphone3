@@ -965,8 +965,16 @@ if (argv.length) {
       const pre = ai < 0 ? [] : parseIds(rest[ai + 1]);
       const texts = (ai < 0 ? rest : rest.slice(0, ai)).filter(Boolean);
       for (const id of pre) if (!s.items.some((i) => i.id === id)) fail(`no item ${id} to depend on`);
+      // ☠️ SAY WHICH ID YOU JUST CREATED. Adding several items in a loop and then
+      // closing them by guessed number went wrong twice in one session: the ids
+      // had shifted, so `done` landed on a neighbouring item and marked work
+      // finished that had never been started - while the item actually finished
+      // stayed open. A silent allocator invites exactly that.
       for (const t of texts.length > 1 ? texts : [texts[0] || arg]) {
-        if (t) s.items.push({ id: s.nextId++, text: t, status: 'todo', ...(pre.length ? { after: pre } : {}) });
+        if (!t) continue;
+        const id = s.nextId++;
+        s.items.push({ id, text: t, status: 'todo', ...(pre.length ? { after: pre } : {}) });
+        console.error(`added #${id}: ${clip(t, 70)}`);
       }
       s.active = true;
       break;
