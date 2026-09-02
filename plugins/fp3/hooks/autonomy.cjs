@@ -62,7 +62,8 @@
 //   node autonomy.cjs after <id> <id,id,...>  this step needs those finished first
 //   node autonomy.cjs unafter <id> <id,...>   drop a prerequisite
 //   node autonomy.cjs note <id> "<text>"      record progress without finishing
-//   node autonomy.cjs wait <id> "<what>"      blocked on something OUTSIDE this
+//   node autonomy.cjs wait <id> "<what>" [--until 19:00|90m|2d]
+//                                             blocked on something OUTSIDE this
 //                                             session - a measurement that has to
 //                                             run, a build, a person. Stays open
 //                                             and visible; does not hold the turn
@@ -119,8 +120,14 @@ const empty = () => ({
   consult: { agent: '', at: 0, atRecords: 0, note: '' }, consultAnnounced: false,
 });
 function read() {
-  try { return Object.assign(empty(), JSON.parse(fs.readFileSync(FILE, 'utf8'))); }
+  let s;
+  try { s = Object.assign(empty(), JSON.parse(fs.readFileSync(FILE, 'utf8'))); }
   catch { return empty(); }
+  // Every read wakes the waits whose deadline has passed, so no path can see a
+  // plan that still calls an expired reason current - not the Stop gate, not
+  // `show`, not the resume block written into STATUS.md.
+  sweepWaits(s);
+  return s;
 }
 // ☠️ ATOMIC, BECAUSE A TORN STATE FILE LOSES THE RUN. write-then-rename means a
 // reader never sees a half-written plan, however the process dies mid-write.
@@ -683,6 +690,39 @@ function parseWhen(w) {
 // and everything a turn does scrolls between the two. A standing instruction that
 // is only at the top is an instruction they have to scroll back for, which in
 // practice means one they ask about instead.
+function parseUntil(spec) {
+  const d = /^(\d+)\s*([mhd])$/.exec(String(spec).trim());
+  if (d) return Date.now() + Number(d[1]) * { m: 6e4, h: 36e5, d: 864e5 }[d[2]];
+  const hm = /^(\d{1,2}):(\d{2})$/.exec(String(spec).trim());
+  if (hm) {
+    const t = new Date();
+    t.setHours(Number(hm[1]), Number(hm[2]), 0, 0);
+    // a clock time that already passed today means TOMORROW - unlike an agreed
+    // human time, a wait deadline in the past would fire the instant it is set
+    if (t.getTime() <= Date.now()) t.setDate(t.getDate() + 1);
+    return t.getTime();
+  }
+  const p = Date.parse(spec);
+  return Number.isFinite(p) ? p : 0;
+}
+
+// ☠️ THE PLAN WAKES ITSELF UP. Every read of the state sweeps the waiting items
+// and returns the expired ones to `todo`, so the next Stop hands out real work
+// instead of reporting an empty actionable list. The item keeps its note, with
+// the expiry stamped on the front, so the reason it waited is still auditable -
+// an item that silently returns is as bad as one that silently rots.
+function sweepWaits(s) {
+  let woke = 0;
+  for (const i of s.items) {
+    if (i.status !== 'waiting' || !i.waitUntil || i.waitUntil > Date.now()) continue;
+    i.status = 'todo';
+    i.note = `☠️ THE WAIT EXPIRED (${i.waitSpec}) — re-check the reason before acting: ${i.note || ''}`;
+    delete i.waitUntil; delete i.waitSpec;
+    woke += 1;
+  }
+  return woke;
+}
+
 function renderHuman(s, tail) {
   const hs = s.items.filter((i) => i.status === 'human');
   if (!hs.length) return [];
@@ -755,16 +795,24 @@ function renderPlan(s) {
     // ☠️ THE STALENESS FLAG MUST NOT BECOME THE NOISE IT REPLACED. With 25
     // waiting items, flagging every old one rebuilds the wall of text this
     // renderer exists to cut. Only the two oldest carry the question.
-    const flagged = new Set([...waiting].filter((i) => i.waitAt)
-      .sort((a, b) => a.waitAt - b.waitAt).slice(0, 2).map((i) => i.id));
+    // ☠️ AND ROTATE THE QUESTION. Flagging the two oldest by waitAt means the same
+    // two items are asked about forever while the rest are never asked at all -
+    // which is how twelve items kept a reason that had expired at 08:15. Ask the
+    // two whose reason has gone longest WITHOUT being questioned.
+    const flagged = new Set([...waiting].filter((i) => i.waitAt && !i.waitUntil)
+      .sort((a, b) => (a.waitAsked || a.waitAt) - (b.waitAsked || b.waitAt))
+      .slice(0, 2).map((i) => i.id));
+    for (const i of waiting) if (flagged.has(i.id)) i.waitAsked = Date.now();
     for (const i of [...waiting].sort(byPrio)) {
       // ☠️ A WAIT REASON GOES STALE SILENTLY. One item in this run waited all
       // day on "the 16:06 timer", which had fired that afternoon; another on
       // "the phone is busy until 16:02". Nothing re-reads a reason nobody is
       // shown, so an old one is surfaced with its age and a question.
       const h = i.waitAt ? (Date.now() - i.waitAt) / 36e5 : null;
-      const age = h != null && h >= 6 && flagged.has(i.id)
-        ? `  ⏳ ${h.toFixed(0)} h — is this reason still true?` : '';
+      const age = i.waitUntil
+        ? `  ⏰ back at ${new Date(i.waitUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+        : (h != null && h >= 2 && flagged.has(i.id)
+          ? `  ⏳ ${h.toFixed(0)} h, and NO --until — is this reason still true?` : '');
       out.push(`  … ${i.id}. ${clip(i.text, 100)}${age}\n        ⟵ ${clip(i.note, 100) || 'reason unstated'}`);
     }
   }
@@ -1122,7 +1170,35 @@ if (argv.length) {
         if (it.status === 'todo') it.status = 'doing';
         it.note = text;
       }
-      else if (cmd === 'wait') { it.status = 'waiting'; it.note = text || it.note; it.waitAt = Date.now(); }
+      else if (cmd === 'wait') {
+        // ☠️ A WAIT WITHOUT AN EXPIRY IS HOW A PLAN ROTS. Measured: a dozen items
+        // were parked with "the phone is busy with the census until ~08:15". The
+        // census ended at 08:15 and nothing re-read the sentence, so at 10:19 the
+        // plan still reported zero actionable work while the phone had been free
+        // for two hours - and the owner had to ask why nothing was happening.
+        // Being blocked has a WHEN, and the WHEN belongs in the state, not in a
+        // sentence nobody re-evaluates. `--until` makes the item come back BY
+        // ITSELF.
+        const ui = rest.indexOf('--until');
+        const spec = ui >= 0 ? rest[ui + 1] : '';
+        const body = ui >= 0 ? rest.slice(1, ui).join(' ') : text;
+        it.status = 'waiting';
+        it.note = body || it.note;
+        it.waitAt = Date.now();
+        it.waitAsked = Date.now();
+        if (spec) {
+          const until = parseUntil(spec);
+          if (!until) fail(`cannot read "${spec}" as a time.\n` +
+            'Use a clock time ("08:15", "2026-09-02 19:00") or a duration ("90m", "6h", "2d").');
+          it.waitUntil = until; it.waitSpec = spec;
+        } else {
+          delete it.waitUntil; delete it.waitSpec;
+          console.error('☠️ no --until given. This item will sit in WAITING until somebody ' +
+            'happens to re-read the reason - which is exactly how a plan reports "nothing to do" ' +
+            'while the thing it waits for finished hours ago.\n' +
+            `   wait ${id} "<why>" --until 19:00   |   --until 90m   |   --until 2d`);
+        }
+      }
       else { it.status = 'dropped'; if (text) it.note = text; }
       break;
     }
