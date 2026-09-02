@@ -98,6 +98,7 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 
@@ -121,6 +122,59 @@ function write(s) {
   try { fs.mkdirSync(DIR, { recursive: true }); fs.writeFileSync(FILE, JSON.stringify(s, null, 1)); }
   catch { /* bookkeeping must never break the session */ }
 }
+// ☠️ ONE RUN, ONE SESSION. This plan drives a single phone: two sessions editing
+// it means two sets of hands on one device, and it has happened - a second
+// terminal picked the plan up and carried on while the first was mid-measurement.
+// The state file is shared, so the file is where the lock has to live.
+//
+// ☠️ AND THE LOCK MUST NOT OUTLIVE ITS OWNER. A lock that a crashed session keeps
+// forever is worse than no lock; the next session cannot work and cannot see why.
+// So ownership is not a timeout, it is a LIVENESS TEST: Claude Code exports
+// CLAUDE_PID, and `kill(pid, 0)` distinguishes "quiet" from "gone" - EPERM means
+// alive under another user, ESRCH means the owner is really dead and the run is
+// free to take. Across machines a pid means nothing, so the hostname is recorded
+// and a foreign host falls back to a staleness window.
+const OWNER_STALE_MIN = 45;
+function me() {
+  return {
+    sid: process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || '',
+    pid: Number(process.env.CLAUDE_PID) || 0,
+    host: os.hostname(),
+  };
+}
+function alive(o) {
+  if (!o || !o.pid) return false;
+  if (o.host && o.host !== os.hostname()) {
+    return o.seen && (Date.now() - o.seen) / 6e4 < OWNER_STALE_MIN;   // cannot test a remote pid
+  }
+  try { process.kill(o.pid, 0); return true; }
+  catch (e) { return e.code === 'EPERM'; }
+}
+// Returns '' when this session may proceed, or a sentence saying why not.
+function ownershipBlock(s) {
+  const m = me();
+  const o = s.owner;
+  if (!m.sid) return '';                       // no identity to enforce with
+  if (!o || !o.sid) { s.owner = Object.assign({}, m, { at: Date.now(), seen: Date.now() }); return ''; }
+  if (o.sid === m.sid) { o.seen = Date.now(); o.pid = m.pid || o.pid; return ''; }
+  if (alive(o)) {
+    return `This autonomous run belongs to another session that is still running ` +
+      `(pid ${o.pid} on ${o.host}, last seen ${((Date.now() - (o.seen || o.at)) / 6e4).toFixed(0)} min ago).\n` +
+      `☠️ Two sessions editing one plan means two sets of hands on one phone - it has already ` +
+      `happened here, mid-measurement.\n` +
+      `Go back to it:  claude --resume ${o.sid}\n` +
+      `If that session is genuinely finished with the run and you know it, take it over ` +
+      `deliberately:  node "${__filename}" claim --force`;
+  }
+  // The owner is gone. Take over, but say so - a silent handover hides the fact
+  // that whatever it was measuring may have died with it.
+  const dead = o.sid;
+  s.owner = Object.assign({}, m, { at: Date.now(), seen: Date.now(), tookOverFrom: dead });
+  console.error(`☠️ took over the run from session ${dead} (pid ${o.pid} is gone). ` +
+    `Anything it had running on the device died with it - check before trusting a measurement in flight.`);
+  return '';
+}
+
 // ☠️ A 'waiting' item is open but NOT actionable, and the difference is the whole
 // point: blocking a turn over work that is waiting on a measurement produces a
 // nudge every turn while nothing can move, and any note written in response
@@ -514,6 +568,25 @@ if (argv.length) {
   const tail = dash === -1 ? [] : rest.slice(dash + 1);
   const fail = (msg) => { console.error(msg); process.exit(1); };
 
+  // ☠️ READS ARE ALWAYS FINE; WRITES BELONG TO THE OWNER. A second session may
+  // look at the plan - that is how it learns it should not touch it - but a
+  // mutation from elsewhere is the failure this lock exists for.
+  const READONLY = new Set(['show', 'flush', 'status', 'claim']);
+  if (cmd === 'claim') {
+    const m = me();
+    if (rest[0] !== '--force' && ownershipBlock(s)) fail(ownershipBlock(s));
+    s.owner = Object.assign({}, m, { at: Date.now(), seen: Date.now(),
+      forced: rest[0] === '--force' ? (s.owner || {}).sid || 'nobody' : undefined });
+    write(s);
+    console.log(`run claimed by session ${m.sid} (pid ${m.pid} on ${m.host})` +
+      (rest[0] === '--force' ? ' — FORCED; the previous owner will be told it lost the run' : ''));
+    process.exit(0);
+  }
+  if (!READONLY.has(cmd)) {
+    const blocked = ownershipBlock(s);
+    if (blocked) fail(`REFUSED: ${blocked}`);
+  }
+
   switch (cmd) {
     case 'start':
       Object.assign(s, empty(), { active: true, goal: arg || s.goal });
@@ -684,6 +757,22 @@ process.stdin.on('end', () => {
   const emit = (name, ctx) => process.stdout.write(JSON.stringify({
     hookSpecificOutput: { hookEventName: name, additionalContext: ctx },
   }));
+
+  // ☠️ A FOREIGN SESSION IS TOLD, NEVER BLOCKED. Blocking another session's Stop
+  // would trap it in a loop over a plan it must not touch; the point is to send
+  // it back to the session that owns the run, not to jam it.
+  if (s.active) {
+    const foreign = ownershipBlock(s);
+    if (foreign) {
+      if (ev.hook_event_name === 'Stop') { process.exit(0); }
+      emit(ev.hook_event_name,
+        `☠️ There is an autonomous run in progress, and it is NOT this session's.\n${foreign}\n\n` +
+        `Do not edit its plan, and do not touch the device it is measuring: another session may ` +
+        `have something running on it right now.`);
+      process.exit(0);
+    }
+    write(s);   // ownershipBlock refreshed the owner's heartbeat
+  }
 
   // A compaction is imminent - flush the durable copy before the context goes.
   if (ev.hook_event_name === 'PreCompact') {
