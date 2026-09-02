@@ -774,6 +774,44 @@ process.stdin.on('end', () => {
     write(s);   // ownershipBlock refreshed the owner's heartbeat
   }
 
+  // ☠️ DO NOT START SOMETHING THAT OUTLIVES THE ANSWER YOU ARE WAITING FOR.
+  // Observed 2026-09-02: a review was asked for, and before it came back a
+  // 75-minute census was launched on the phone. The review's first point was
+  // that the census's alarm length was wrong - and by then the phone was
+  // unreachable inside its own sleep cycles, so the run could not be stopped.
+  // A fifth of its samples are systematically contaminated as a result.
+  //
+  // The rule is not about censuses. It is: if the thing you are about to start
+  // takes longer than the answer you are already waiting for, the answer comes
+  // first. Asking and then acting is the same as not asking.
+  if (ev.hook_event_name === 'PreToolUse') {
+    const cmd = String((ev.tool_input || {}).command || '');
+    const LONG = /(systemd-run[^\n]*--unit=)|((ims-ma|ims-ab|modem-night|modem-window|band-ladder|sleep-night|modem-core|duty-vs-uptime|mode-ladder)\S*\.sh)/;
+    const c = s.consult || {};
+    if (s.active && c.pendingAt && LONG.test(cmd)) {
+      const mins = ((Date.now() - c.pendingAt) / 6e4).toFixed(0);
+      process.stdout.write(JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'deny',
+          permissionDecisionReason:
+            `A review has been out with ${c.agent} for ${mins} min and this command starts ` +
+            `something long on the device.\n\n` +
+            `☠️ You asked, then acted before the answer came - and that has already cost a run ` +
+            `today: a 75-minute census was launched minutes before the review said its alarm ` +
+            `length was wrong, by which time the phone was inside its own sleep cycles and ` +
+            `could not be reached to stop it.\n\n` +
+            `Wait for the answer. If it genuinely cannot bear on this measurement, close the ` +
+            `loop honestly first and the gate opens:\n` +
+            `  node "${__filename}" consulted ${c.agent} -- "<the findings>"\n` +
+            `  node "${__filename}" consulted none -- "<why it cannot help here>"`,
+        },
+      }));
+      process.exit(0);
+    }
+    process.exit(0);
+  }
+
   // A compaction is imminent - flush the durable copy before the context goes.
   if (ev.hook_event_name === 'PreCompact') {
     if (s.active) flushStatus(s);
