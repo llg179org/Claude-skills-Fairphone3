@@ -1189,7 +1189,14 @@ process.stdin.on('end', () => {
       // A reminder that repeats unchanged is noise, and noise trains the reader to
       // skip the channel it arrives on. Re-announce only when the set of waiting
       // items actually changes.
-      const wsig = waiting.map((i) => `${i.id}:${i.note || ''}`).join('|');
+      // ☠️ A HUMAN TASK CHANGES THIS BRANCH'S SIGNATURE. Without it in wsig, the
+      // "nothing left but waiting" message is announced once and then suppressed
+      // as a repeat - so the moment somebody is actually waiting on a person, the
+      // instructions stop being printed. That is the exact branch where they
+      // matter most, because there is nothing else on screen to read.
+      const humanSig = s.items.filter((i) => i.status === 'human')
+        .map((i) => `${i.id}:${i.humanWhen}`).join('|');
+      const wsig = waiting.map((i) => `${i.id}:${i.note || ''}`).join('|') + '#' + humanSig;
       if (s.waitAnnounced === wsig) { write(s); process.exit(0); }
       s.waitAnnounced = wsig; write(s); flushStatus(s);
       emit('Stop',
@@ -1200,7 +1207,8 @@ process.stdin.on('end', () => {
         `\nNot blocking, and no reply is owed. ☠️ A gate that can be satisfied with text ` +
         `teaches writing, not working: pass it by mutating state (done / wait / drop / reopen), ` +
         `never by narrating. Tell the user something when a measurement turned or they asked - ` +
-        `not to prove you are alive.`);
+        `not to prove you are alive.` +
+        (humanSig ? '\n' + renderHuman(s, true).join('\n') : ''));
       process.exit(0);
     }
     if (!open.length) {
