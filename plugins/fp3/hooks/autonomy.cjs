@@ -56,7 +56,11 @@
 // a gate with its own budget is a second way to spin.
 //
 //   node autonomy.cjs start "<goal>"          begin an autonomous run
-//   node autonomy.cjs add "<step>" [...]      append steps
+//   node autonomy.cjs add "<step>" [...] [--after 12,15]
+//                                             append steps, optionally with the
+//                                             steps that must finish first
+//   node autonomy.cjs after <id> <id,id,...>  this step needs those finished first
+//   node autonomy.cjs unafter <id> <id,...>   drop a prerequisite
 //   node autonomy.cjs note <id> "<text>"      record progress without finishing
 //   node autonomy.cjs wait <id> "<what>"      blocked on something OUTSIDE this
 //                                             session - a measurement that has to
@@ -278,14 +282,19 @@ function ownershipBlock(s) {
 // restores the anti-spin budget, so it never terminates. That happened - the
 // hook pushed for the next item five times while every item was blocked on one
 // running measurement. Waiting items hold the plan, not the turn.
-const openItems = (s) => s.items.filter((i) => i.status === 'todo' || i.status === 'doing');
+// (an "open" item is todo or doing; whether it is ACTIONABLE additionally depends
+// on its prerequisites - see actionableItems() below)
 const waitingItems = (s) => s.items.filter((i) => i.status === 'waiting');
 // The hash is what the anti-spin budget watches, so EVERY kind of progress must
 // be in it - including a recorded fact, which is the only progress there is on a
 // turn whose whole job was to write down a result.
 const hash = (s) => crypto.createHash('sha1')
   .update(JSON.stringify([
-    s.items.map((i) => [i.id, i.status, i.text, i.note || '', i.ev || '']),
+    // ☠️ `after` IS IN THE HASH. Adding a dependency is progress - it is often the
+    // whole content of a turn that untangles a plan - and if the hash cannot see
+    // it, the anti-spin budget is not given back and the next Stop nudges as if
+    // nothing happened.
+    s.items.map((i) => [i.id, i.status, i.text, i.note || '', i.ev || '', (i.after || []).join(',')]),
     s.facts.map((f) => [f.kind, f.text, f.ev || '']),
   ]))
   .digest('hex').slice(0, 12);
@@ -495,7 +504,10 @@ function render(s) {
   const line = (i) => {
     const mark = { todo: '[ ]', doing: '[~]', done: '[x]', dropped: '[-]', waiting: '[…]' }[i.status] || '[?]';
     const ev = i.ev ? `  ⟨${i.ev}⟩` : '';
-    return `  ${mark} ${i.id}. ${i.text}${ev}${i.note ? `\n        · ${i.note}` : ''}`;
+    // The durable record has to survive a compaction on its own, so the
+    // dependency is written out here too - not only computed in the reminder.
+    const dep = (i.after || []).length ? `  (after ${i.after.join(', ')})` : '';
+    return `  ${mark} ${i.id}. ${i.text}${dep}${ev}${i.note ? `\n        · ${i.note}` : ''}`;
   };
   return [`GOAL: ${s.goal}`, ...s.items.map(line)].join('\n');
 }
@@ -512,11 +524,113 @@ function render(s) {
 // be written down. Rank by stars, break ties by id, and say the rank out loud.
 const prio = (i) => (String(i.text).match(/★/g) || []).length;
 const byPrio = (a, b) => prio(b) - prio(a) || a.id - b.id;
+
+// ☠️ RANK WITHOUT DEPENDENCIES PUSHES WORK THAT CANNOT BE STARTED. NEXT was
+// "most stars, ties by id", and nothing in the plan could say that item 9 needs
+// item 12 finished first. So a 3★ step that is not yet startable outranks the 1★
+// step it is waiting on, the hook nudges for it every turn, and the reply is
+// either a note that changes nothing or the 1★ done out of order and unrecorded.
+//
+// ☠️ AND INHERITANCE IS NOT A TEXT REWRITE. The stars are the author's INTENT -
+// how much this step matters - and they stay exactly as written. The ranking is a
+// property of the GRAPH: a step that unblocks something urgent is urgent to do,
+// whether or not anybody thought to star it that way. Editing the text to say 3★
+// would destroy the intent and make the two indistinguishable; computing it keeps
+// both, and the render shows WHICH item lent the priority so the order can be
+// argued with.
+const after = (i) => (Array.isArray(i.after) ? i.after : []);
+const byId = (s) => new Map(s.items.map((i) => [i.id, i]));
+// Unmet prerequisites, split by kind: a `dropped` prerequisite is NOT met - the
+// step it stood for never happened - but it will never become met either, so it
+// is reported as a decision to make rather than as a wait.
+function blockers(s, i) {
+  const m = byId(s);
+  const open = [], gone = [];
+  for (const id of after(i)) {
+    const p = m.get(id);
+    if (!p) { gone.push(id); continue; }          // deleted prerequisite: same decision
+    if (p.status === 'done') continue;
+    (p.status === 'dropped' ? gone : open).push(id);
+  }
+  return { open, gone, all: open.concat(gone) };
+}
+function parseIds(t) {
+  return String(t || '').split(/[\s,]+/).filter(Boolean).map(Number)
+    .filter((n) => Number.isFinite(n));
+}
+// Would `id` depend (transitively) on itself once `pre` are its prerequisites?
+// Returns the path for the error message - "which cycle" is the only useful part.
+function findCycle(s, id, pre) {
+  const m = byId(s);
+  const seen = new Set();
+  const walk = (cur, path) => {
+    if (cur === id && path.length) return path.concat([id]);
+    if (seen.has(cur)) return null;
+    seen.add(cur);
+    const it = m.get(cur);
+    for (const a of (cur === id ? pre : after(it || {}))) {
+      const r = walk(a, path.concat([cur]));
+      if (r) return r;
+    }
+    return null;
+  };
+  return walk(id, []);
+}
+const isActionable = (s, i) => (i.status === 'todo' || i.status === 'doing') && !blockers(s, i).all.length;
+const actionableItems = (s) => s.items.filter((i) => isActionable(s, i));
+const blockedItems = (s) => s.items.filter((i) =>
+  (i.status === 'todo' || i.status === 'doing') && blockers(s, i).all.length);
+
+// Effective priority = max(own stars, every dependent's effective priority),
+// transitively. Cycles are refused at write time; the `seen` set keeps a state
+// file hand-edited into a cycle from hanging the hook instead of reporting it.
+function effPrioMap(s) {
+  const deps = new Map();                          // id -> items that require it
+  for (const i of s.items) for (const a of after(i)) {
+    if (!deps.has(a)) deps.set(a, []);
+    deps.get(a).push(i);
+  }
+  const memo = new Map();
+  const walk = (i, seen) => {
+    if (memo.has(i.id)) return memo.get(i.id).p;
+    if (seen.has(i.id)) return prio(i);            // cycle: stop at own stars
+    seen.add(i.id);
+    let best = prio(i), from = null;
+    for (const d of deps.get(i.id) || []) {
+      const v = walk(d, seen);
+      if (v > best) { best = v; from = d.id; }     // credit the item that lent it
+    }
+    seen.delete(i.id);
+    memo.set(i.id, { p: best, from });
+    return best;
+  };
+  for (const i of s.items) walk(i, new Set());
+  return memo;
+}
+function byEff(s) {
+  const m = effPrioMap(s);
+  const e = (i) => (m.get(i.id) ? m.get(i.id).p : prio(i));
+  return (a, b) => e(b) - e(a) || prio(b) - prio(a) || a.id - b.id;
+}
+// "1★ (↑3 via #7)" - shown only when the rank is not the item's own stars, so the
+// reader can see why it moved up and dispute it.
+function effTag(s, i, m) {
+  m = m || effPrioMap(s);
+  const r = m.get(i.id);
+  if (!r || r.p <= prio(i) || r.from == null) return '';
+  return `  ${prio(i)}★ (↑${r.p} via #${r.from})`;
+}
 function clip(t, n) {
   t = String(t == null ? '' : t).replace(/\s+/g, ' ').trim();
   return t.length > n ? `${t.slice(0, n - 1)}…` : t;
 }
-function nextItem(open) { return [...open].sort(byPrio)[0]; }
+// ☠️ NEXT COMES FROM THE ACTIONABLE SET, NOT THE OPEN SET. An item whose
+// prerequisites are unfinished is open, and pointing at it is pointing at work
+// that cannot be started.
+function nextItem(s, open) {
+  const pool = (open || s.items).filter((i) => isActionable(s, i));
+  return [...pool].sort(byEff(s))[0];
+}
 
 // ☠️ EVERY GATE HERE POINTS AT AN INCIDENT; NONE OF THEM CAN SAY WHETHER IT HAS
 // CAUGHT ANYTHING SINCE. A gate that fires often and rightly earns its cost; one
@@ -602,22 +716,38 @@ function renderHuman(s, tail) {
 
 function renderPlan(s) {
   if (!s.active) return 'No autonomous run is active.';
-  const open = s.items.filter((i) => i.status === 'todo' || i.status === 'doing');
+  const open = actionableItems(s);
+  const blocked = blockedItems(s);
   const waiting = s.items.filter((i) => i.status === 'waiting');
+  const em = effPrioMap(s);
   const done = s.items.filter((i) => i.status === 'done').length;
   const dropped = s.items.filter((i) => i.status === 'dropped').length;
   const out = [
     `GOAL: ${s.goal}`,
-    `${done} done · ${dropped} dropped · ${open.length} actionable · ${waiting.length} waiting` +
+    `${done} done · ${dropped} dropped · ${open.length} actionable · ` +
+      `${blocked.length ? `${blocked.length} blocked · ` : ''}${waiting.length} waiting` +
       `${s.items.filter((i) => i.status === 'human').length ? ` · ${s.items.filter((i) => i.status === 'human').length} with a person` : ''}` +
       `   (every item, with notes: \`node "${__filename}" show\`)`,
   ];
   out.push(...renderHuman(s, false));
   if (open.length) {
     out.push('', 'ACTIONABLE — highest priority first, act on the top one:');
-    for (const i of [...open].sort(byPrio)) {
+    for (const i of [...open].sort(byEff(s))) {
       out.push(`  ${i.status === 'doing' ? '[~]' : '[ ]'} ${i.id}. ${i.text}` +
-        (i.ev ? `  ⟨${i.ev}⟩` : '') + (i.note ? `\n        · ${i.note}` : ''));
+        effTag(s, i, em) + (i.ev ? `  ⟨${i.ev}⟩` : '') + (i.note ? `\n        · ${i.note}` : ''));
+    }
+  }
+  if (blocked.length) {
+    // One line each, like the waiting items: these cannot be worked on, so the
+    // only thing worth reading is WHAT they are waiting for.
+    out.push('', 'BLOCKED — prerequisites unfinished; finish those first:');
+    for (const i of [...blocked].sort(byEff(s))) {
+      const b = blockers(s, i);
+      const gone = b.gone.length
+        ? `  ☠️ prerequisite dropped or gone: ${b.gone.join(', ')} — decide: \`drop\` this too, or \`unafter\``
+        : '';
+      out.push(`  ⛔ ${i.id}. ${clip(i.text, 100)}${effTag(s, i, em)}\n` +
+        `        waiting on: ${b.all.join(', ')}${gone}`);
     }
   }
   if (waiting.length) {
@@ -775,12 +905,41 @@ if (argv.length) {
     case 'start':
       Object.assign(s, empty(), { active: true, goal: arg || s.goal });
       break;
-    case 'add':
-      for (const t of rest.length > 1 ? rest : [arg]) {
-        if (t) s.items.push({ id: s.nextId++, text: t, status: 'todo' });
+    case 'add': {
+      const ai = rest.indexOf('--after');
+      const pre = ai < 0 ? [] : parseIds(rest[ai + 1]);
+      const texts = (ai < 0 ? rest : rest.slice(0, ai)).filter(Boolean);
+      for (const id of pre) if (!s.items.some((i) => i.id === id)) fail(`no item ${id} to depend on`);
+      for (const t of texts.length > 1 ? texts : [texts[0] || arg]) {
+        if (t) s.items.push({ id: s.nextId++, text: t, status: 'todo', ...(pre.length ? { after: pre } : {}) });
       }
       s.active = true;
       break;
+    }
+    case 'after': case 'unafter': {
+      const id = Number(rest[0]);
+      const it = s.items.find((i) => i.id === id);
+      if (!it) fail(`no item ${rest[0]}\nusage: ${cmd} <id> <id,id,...>`);
+      const ids = parseIds(rest.slice(1).join(','));
+      if (!ids.length) fail(`usage: ${cmd} <id> <id,id,...>`);
+      if (cmd === 'unafter') {
+        it.after = after(it).filter((a) => !ids.includes(a));
+        if (!it.after.length) delete it.after;
+        break;
+      }
+      for (const a of ids) {
+        if (a === id) fail(`REFUSED: item ${id} cannot depend on itself.`);
+        if (!s.items.some((i) => i.id === a)) fail(`REFUSED: no item ${a} to depend on.`);
+      }
+      const merged = [...new Set(after(it).concat(ids))];
+      const cyc = findCycle(s, id, merged);
+      if (cyc) fail(`REFUSED: that would make a cycle: ${cyc.join(' → ')}.\n` +
+        '☠️ A cycle is not a scheduling detail - every item on it becomes permanently ' +
+        'un-startable, and the plan looks full while nothing can move. Decide which ' +
+        'direction is real and `unafter` the other.');
+      it.after = merged;
+      break;
+    }
     case 'status':
       if (!arg) fail('usage: status <path/to/STATUS.md>');
       if (!fs.existsSync(arg)) fail(`no such file: ${arg} — the resume block needs a file that exists`);
@@ -973,7 +1132,7 @@ if (argv.length) {
     case 'flush': case 'show':
       break;
     default:
-      console.error('usage: start|add|note|wait|human|done|drop|measured|retracted|consulted|status|watch|flush|show|stop');
+      console.error('usage: start|add|note|wait|human|after|unafter|done|drop|measured|retracted|consulted|status|watch|flush|show|stop');
       process.exit(2);
   }
   if (cmd !== 'show') {
@@ -1111,7 +1270,8 @@ process.stdin.on('end', () => {
 
   if (ev.hook_event_name === 'Stop') {
     if (!s.active) process.exit(0);
-    const open = openItems(s);
+    const open = actionableItems(s);
+    const blocked = blockedItems(s);
     const waiting = waitingItems(s);
     const h = hash(s);
     if (h !== s.lastHash) { s.blocks = 0; s.lastHash = h; }
@@ -1196,7 +1356,13 @@ process.stdin.on('end', () => {
       // matter most, because there is nothing else on screen to read.
       const humanSig = s.items.filter((i) => i.status === 'human')
         .map((i) => `${i.id}:${i.humanWhen}`).join('|');
-      const wsig = waiting.map((i) => `${i.id}:${i.note || ''}`).join('|') + '#' + humanSig;
+      // ☠️ AND THE BLOCKED SET IS IN THE SIGNATURE TOO. This branch runs BEFORE
+      // the all-blocked one, so in a mixed plan - some items waiting, some blocked
+      // behind them - it takes the turn and the blocked items would never be named
+      // at all. Caught by reading the branch order, not by a test: the live plan
+      // has 22 waiting items, so this is the branch that always wins here.
+      const bsig0 = blocked.map((i) => `${i.id}:${blockers(s, i).all.join('.')}`).join('|');
+      const wsig = waiting.map((i) => `${i.id}:${i.note || ''}`).join('|') + '#' + humanSig + '#' + bsig0;
       if (s.waitAnnounced === wsig) { write(s); process.exit(0); }
       s.waitAnnounced = wsig; write(s); flushStatus(s);
       emit('Stop',
@@ -1208,7 +1374,31 @@ process.stdin.on('end', () => {
         `teaches writing, not working: pass it by mutating state (done / wait / drop / reopen), ` +
         `never by narrating. Tell the user something when a measurement turned or they asked - ` +
         `not to prove you are alive.` +
+        (blocked.length ? `\n\n⛔ BLOCKED — open, but waiting on an unfinished prerequisite:\n` +
+          blocked.map((i) => `  ${i.id}. ${clip(i.text, 90)}\n        waiting on: ${blockers(s, i).all.join(', ')}`)
+            .join('\n') : '') +
         (humanSig ? '\n' + renderHuman(s, true).join('\n') : ''));
+      process.exit(0);
+    }
+    // ☠️ ALL-BLOCKED IS THE SAME TRAP AS ALL-WAITING, AND IT IS WORSE, BECAUSE THE
+    // PLAN LOOKS FULL. Nothing is startable, so a block produces a nudge every turn
+    // for work that cannot begin, and any note written in reply restores the
+    // anti-spin budget - it never terminates. Say it once, per distinct blocked set,
+    // and let the turn end.
+    if (!open.length && blocked.length) {
+      const bsig = blocked.map((i) => `${i.id}:${blockers(s, i).all.join('.')}`).join('|');
+      if (s.blockedAnnounced === bsig) { write(s); process.exit(0); }
+      s.blockedAnnounced = bsig;
+      logGate(s, 'all-blocked'); write(s); flushStatus(s);
+      emit('Stop',
+        `Nothing is startable: ${blocked.length} open item(s), every one waiting on an ` +
+        `unfinished prerequisite.\n` +
+        blocked.map((i) => `  ⛔ ${i.id}. ${clip(i.text, 90)}\n        waiting on: ${blockers(s, i).all.join(', ')}`)
+          .join('\n') +
+        `\n☠️ Not blocking the turn - a plan that is full but frozen would spin forever. ` +
+        `Either the prerequisite is really open (finish it, or \`wait\` it with a reason), ` +
+        `or the dependency is wrong (\`unafter\`). A dropped prerequisite is a decision, ` +
+        `not a wait.`);
       process.exit(0);
     }
     if (!open.length) {
@@ -1223,12 +1413,12 @@ process.stdin.on('end', () => {
       emit('Stop',
         `☠️ The autonomous plan has not changed across ${MAX_BLOCKS} turns while ` +
         `${open.length} item(s) are still open. Not blocking again — that would spin. ` +
-        `Tell the user plainly what is blocking item ${nextItem(open).id} ` +
-        `("${clip(nextItem(open).text, 120)}") ` +
+        `Tell the user plainly what is blocking item ${nextItem(s, open).id} ` +
+        `("${clip(nextItem(s, open).text, 120)}") ` +
         `and what you need from them.`);
       process.exit(0);
     }
-    const nx = nextItem(open);
+    const nx = nextItem(s, open);
     s.blocks += 1; logGate(s, 'open-work'); write(s); flushStatus(s);
     process.stdout.write(JSON.stringify({
       decision: 'block',
