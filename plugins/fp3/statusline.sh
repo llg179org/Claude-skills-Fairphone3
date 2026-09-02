@@ -49,7 +49,13 @@ PCT=$(echo "$input" | jq -r '.context_window.used_percentage // 0' | cut -d. -f1
 
 # --- reset instants are ABSOLUTE local times, not "time left" -------------
 fmt_time()  { date -d "@$1" "+%H:%M"; }
-fmt_date()  { date -d "@$1" "+%m-%d %H:%M"; }
+fmt_date()  {
+    local dow time
+    dow=$(date -d "@$1" "+%u")
+    time=$(date -d "@$1" "+%H:%M")
+    local days=(_ Hét Kedd Szer Csüt Pén Szo Vas)
+    echo "${days[$dow]} $time"
+}
 
 FIVE_PCT=$(echo "$input" | jq -r '.rate_limits.five_hour.used_percentage // empty')
 FIVE_RESET=$(echo "$input" | jq -r '.rate_limits.five_hour.resets_at // empty')
