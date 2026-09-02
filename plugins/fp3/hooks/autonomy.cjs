@@ -564,10 +564,17 @@ function parseWhen(w) {
   return Number.isFinite(t) ? t : 0;
 }
 
-function renderHuman(s) {
+// ☠️ THIS BLOCK IS RENDERED TWICE ON PURPOSE - once at the top for priority, and
+// once as the LAST THING in the plan. The person reads the bottom of the console,
+// and everything a turn does scrolls between the two. A standing instruction that
+// is only at the top is an instruction they have to scroll back for, which in
+// practice means one they ask about instead.
+function renderHuman(s, tail) {
   const hs = s.items.filter((i) => i.status === 'human');
   if (!hs.length) return [];
-  const out = ['', 'AGREED WITH A PERSON — a time somebody else is keeping; do not move it silently:'];
+  const out = ['', tail
+    ? '⏰ STILL WAITING ON A PERSON — this is what they are doing and what it is for:'
+    : 'AGREED WITH A PERSON — a time somebody else is keeping; do not move it silently:'];
   for (const i of hs.sort((a, b) => (a.humanAt || 0) - (b.humanAt || 0))) {
     let when = i.humanWhen;
     if (i.humanAt) {
@@ -575,7 +582,20 @@ function renderHuman(s) {
       when += m >= 0 ? `  (in ${m < 1 ? '<1' : m.toFixed(0)} min)`
         : `  ⏳ ${(-m).toFixed(0)} min AGO — if it has not happened, ASK, do not reschedule`;
     }
-    out.push(`  ⏰ ${i.id}. ${clip(i.text, 100)}\n        ⟵ ${when}${i.note ? ` — ${clip(i.note, 90)}` : ''}`);
+    // ☠️ NOT clipped. Everything else in this renderer is trimmed to keep the
+    // reminder short; this is the one item somebody else has to act on, and a
+    // truncated instruction is worse than none - it looks complete.
+    out.push(`  ⏰ ${i.id}. ${i.text}`);
+    out.push(`        WHEN: ${when}`);
+    if (i.humanSteps && i.humanSteps.length) {
+      out.push('        THEY DO:');
+      i.humanSteps.forEach((t, k) => out.push(`          ${k + 1}. ${t}`));
+    } else {
+      out.push('        THEY DO: ☠️ NOT WRITTEN DOWN — say it before they have to ask');
+    }
+    if (i.humanMine) out.push(`        I DO MEANWHILE: ${i.humanMine}`);
+    if (i.humanNext) out.push(`        THEN: ${i.humanNext}`);
+    if (i.note) out.push(`        NOTE: ${i.note}`);
   }
   return out;
 }
@@ -592,7 +612,7 @@ function renderPlan(s) {
       `${s.items.filter((i) => i.status === 'human').length ? ` · ${s.items.filter((i) => i.status === 'human').length} with a person` : ''}` +
       `   (every item, with notes: \`node "${__filename}" show\`)`,
   ];
-  out.push(...renderHuman(s));
+  out.push(...renderHuman(s, false));
   if (open.length) {
     out.push('', 'ACTIONABLE — highest priority first, act on the top one:');
     for (const i of [...open].sort(byPrio)) {
@@ -618,6 +638,7 @@ function renderPlan(s) {
       out.push(`  … ${i.id}. ${clip(i.text, 100)}${age}\n        ⟵ ${clip(i.note, 100) || 'reason unstated'}`);
     }
   }
+  out.push(...renderHuman(s, true));
   return out.join('\n');
 }
 
@@ -880,7 +901,26 @@ if (argv.length) {
       if (!it) fail(`no item ${rest[0]}`);
       const args = rest.slice(1);
       const force = args.includes('--reschedule');
-      const body = args.filter((a) => a !== '--reschedule');
+      // ☠️ THE INSTRUCTION HAS TO LIVE IN THE STATE, NOT IN A SENTENCE I TYPED
+      // ONCE. Measured the hard way: the person was told what to do in prose, the
+      // console then scrolled on with unrelated work, and by the time the agreed
+      // moment came they had to ask "what was the call supposed to be - is ringing
+      // enough, do I answer?". A one-line note cannot answer that. So the steps
+      // they perform, what I am doing meanwhile, and what happens after are FIELDS,
+      // re-rendered in full every turn.
+      const steps = [];
+      let mine = '', next = '';
+      for (let k = 0; k < args.length; k++) {
+        if (args[k] === '--step') steps.push(args[++k] || '');
+        else if (args[k] === '--mine') mine = args[++k] || '';
+        else if (args[k] === '--next') next = args[++k] || '';
+      }
+      const drop = new Set();
+      for (let k = 0; k < args.length; k++) {
+        if (['--step', '--mine', '--next'].includes(args[k])) { drop.add(k); drop.add(k + 1); }
+        else if (args[k] === '--reschedule') drop.add(k);
+      }
+      const body = args.filter((_, k) => !drop.has(k));
       const sep = body.indexOf('--');
       const when = (sep < 0 ? body : body.slice(0, sep)).join(' ').trim();
       const text = sep < 0 ? '' : body.slice(sep + 1).join(' ').trim();
@@ -894,6 +934,13 @@ if (argv.length) {
         'A time pushed twice is a promise the other side stops believing.');
       if (it.humanAt && force) logGate(s, 'OVERRIDE:human-reschedule');
       it.status = 'human';
+      if (steps.length) it.humanSteps = steps;
+      if (mine) it.humanMine = mine;
+      if (next) it.humanNext = next;
+      if (!it.humanSteps || !it.humanSteps.length) console.error(
+        '☠️ no --step given: this item now shows a time and no instructions. The person will have to ' +
+        'ask what to do at the moment they were supposed to be doing it.\n' +
+        '   human <id> <when> --step "..." --step "..." --mine "<what I do meanwhile>" --next "<what follows>"');
       it.humanWhen = when;
       it.humanAt = at;
       it.humanSetAt = Date.now();
