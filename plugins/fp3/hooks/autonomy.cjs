@@ -548,6 +548,38 @@ function renderGates(s) {
   return out.join('\n');
 }
 
+// Parse only what can be parsed without guessing. "08:35" and "2026-09-02 08:35"
+// become a timestamp; anything else ("this evening") is kept as prose and rendered
+// as prose - an unparsed time is still an agreed time, it just cannot be counted down.
+function parseWhen(w) {
+  const hm = /^(\d{1,2}):(\d{2})$/.exec(w.trim());
+  if (hm) {
+    const d = new Date();
+    d.setHours(Number(hm[1]), Number(hm[2]), 0, 0);
+    // An agreed time that already passed today means today, not tomorrow: the
+    // point of the field is to show it as overdue, never to hide it a day out.
+    return d.getTime();
+  }
+  const t = Date.parse(w);
+  return Number.isFinite(t) ? t : 0;
+}
+
+function renderHuman(s) {
+  const hs = s.items.filter((i) => i.status === 'human');
+  if (!hs.length) return [];
+  const out = ['', 'AGREED WITH A PERSON — a time somebody else is keeping; do not move it silently:'];
+  for (const i of hs.sort((a, b) => (a.humanAt || 0) - (b.humanAt || 0))) {
+    let when = i.humanWhen;
+    if (i.humanAt) {
+      const m = (i.humanAt - Date.now()) / 6e4;
+      when += m >= 0 ? `  (in ${m < 1 ? '<1' : m.toFixed(0)} min)`
+        : `  ⏳ ${(-m).toFixed(0)} min AGO — if it has not happened, ASK, do not reschedule`;
+    }
+    out.push(`  ⏰ ${i.id}. ${clip(i.text, 100)}\n        ⟵ ${when}${i.note ? ` — ${clip(i.note, 90)}` : ''}`);
+  }
+  return out;
+}
+
 function renderPlan(s) {
   if (!s.active) return 'No autonomous run is active.';
   const open = s.items.filter((i) => i.status === 'todo' || i.status === 'doing');
@@ -557,8 +589,10 @@ function renderPlan(s) {
   const out = [
     `GOAL: ${s.goal}`,
     `${done} done · ${dropped} dropped · ${open.length} actionable · ${waiting.length} waiting` +
+      `${s.items.filter((i) => i.status === 'human').length ? ` · ${s.items.filter((i) => i.status === 'human').length} with a person` : ''}` +
       `   (every item, with notes: \`node "${__filename}" show\`)`,
   ];
+  out.push(...renderHuman(s));
   if (open.length) {
     out.push('', 'ACTIONABLE — highest priority first, act on the top one:');
     for (const i of [...open].sort(byPrio)) {
@@ -831,6 +865,41 @@ if (argv.length) {
       if (tail.length) it.note = tail.join(' ');
       break;
     }
+    // ☠️ A HUMAN TASK IS NOT A `waiting` ITEM. `waiting` is passive - something
+    // measures, and nobody owes anybody anything. A task handed to a person who
+    // agreed to a TIME is the opposite: an obligation in both directions, and the
+    // side that can quietly break it is this one. The failure mode is not
+    // forgetting, it is DRIFT - "call at 08:35" becomes "call in a few minutes"
+    // becomes an apology, and each slip is individually reasonable while the
+    // collaboration degrades. So the time is stored, it is rendered ABOVE the
+    // actionable list, and moving it costs an explicit --reschedule that is logged
+    // as an override, exactly like `claim --force`.
+    case 'human': {
+      const id = Number(rest[0]);
+      const it = s.items.find((i) => i.id === id);
+      if (!it) fail(`no item ${rest[0]}`);
+      const args = rest.slice(1);
+      const force = args.includes('--reschedule');
+      const body = args.filter((a) => a !== '--reschedule');
+      const sep = body.indexOf('--');
+      const when = (sep < 0 ? body : body.slice(0, sep)).join(' ').trim();
+      const text = sep < 0 ? '' : body.slice(sep + 1).join(' ').trim();
+      if (!when) fail('usage: human <id> <when> [--reschedule] -- "<what the person agreed to do>"\n' +
+        '`when` is the agreed time, written the way it was agreed: "08:35", "this evening", "after the call".');
+      const at = parseWhen(when);
+      if (it.humanAt && it.humanWhen !== when && !force) fail(
+        `REFUSED: item ${id} already has an agreed time with a person: "${it.humanWhen}".\n` +
+        '☠️ Moving it is not bookkeeping - somebody arranged their morning around it. If the time really ' +
+        'has to move, say so TO THEM first, then record it with --reschedule.\n' +
+        'A time pushed twice is a promise the other side stops believing.');
+      if (it.humanAt && force) logGate(s, 'OVERRIDE:human-reschedule');
+      it.status = 'human';
+      it.humanWhen = when;
+      it.humanAt = at;
+      it.humanSetAt = Date.now();
+      if (text) it.note = text;
+      break;
+    }
     case 'drop': case 'note': case 'wait': {
       const id = Number(rest[0]);
       const it = s.items.find((i) => i.id === id);
@@ -857,7 +926,7 @@ if (argv.length) {
     case 'flush': case 'show':
       break;
     default:
-      console.error('usage: start|add|note|wait|done|drop|measured|retracted|consulted|status|watch|flush|show|stop');
+      console.error('usage: start|add|note|wait|human|done|drop|measured|retracted|consulted|status|watch|flush|show|stop');
       process.exit(2);
   }
   if (cmd !== 'show') {
