@@ -247,9 +247,17 @@ const CONSULT_EVERY = 6;   // results recorded between reviews
 const CONSULT_HOURS = 4;   // ...or this long, whichever comes first
 const records = (s) =>
   s.facts.length + s.items.filter((i) => i.status === 'done' || i.status === 'dropped').length;
+// ☠️ A GATE THAT FIRES WHILE THE ANSWER IS ON ITS WAY IS NOISE. The review is
+// asked for by sending a message and arrives minutes later; the first version
+// re-fired on every Stop in between, so the same demand appeared three times for
+// one review and once while a review was already running. `consulting <agent>`
+// marks it in flight and buys CONSULT_GRACE_MIN minutes of quiet - long enough
+// for an answer, short enough that a review that never returns is asked again.
+const CONSULT_GRACE_MIN = 20;
 function consultDue(s) {
   if (!s.active) return '';
   const c = s.consult || {};
+  if (c.pendingAt && (Date.now() - c.pendingAt) / 6e4 < CONSULT_GRACE_MIN) return '';
   if (!c.at) return 'no outside review has been recorded in this run yet';
   const dn = records(s) - (c.atRecords || 0);
   if (dn >= CONSULT_EVERY) return `${dn} results have been recorded since the last review`;
@@ -331,7 +339,13 @@ function renderPlan(s) {
   if (waiting.length) {
     out.push('', 'WAITING — nothing to do on these; do not disturb what they measure:');
     for (const i of [...waiting].sort(byPrio)) {
-      out.push(`  … ${i.id}. ${clip(i.text, 100)}\n        ⟵ ${clip(i.note, 100) || 'reason unstated'}`);
+      // ☠️ A WAIT REASON GOES STALE SILENTLY. One item in this run waited all
+      // day on "the 16:06 timer", which had fired that afternoon; another on
+      // "the phone is busy until 16:02". Nothing re-reads a reason nobody is
+      // shown, so an old one is surfaced with its age and a question.
+      const h = i.waitAt ? (Date.now() - i.waitAt) / 36e5 : null;
+      const age = h != null && h >= 6 ? `  ⏳ ${h.toFixed(0)} h — is this reason still true?` : '';
+      out.push(`  … ${i.id}. ${clip(i.text, 100)}${age}\n        ⟵ ${clip(i.note, 100) || 'reason unstated'}`);
     }
   }
   return out.join('\n');
@@ -467,6 +481,15 @@ if (argv.length) {
       if (!s.watch.includes(arg)) s.watch.push(arg);
       break;
     }
+    case 'consulting': {
+      // ☠️ MARK IT WHEN YOU SEND, NOT WHEN IT ANSWERS. A review takes minutes to
+      // come back; without this the gate re-fires on every Stop in between and
+      // the same demand is read as three separate ones.
+      const agent = head.join(' ').trim();
+      if (!agent) fail('usage: consulting <agent-name-or-id>   (call it right after SendMessage)');
+      s.consult = Object.assign({}, s.consult, { agent, pendingAt: Date.now() });
+      break;
+    }
     case 'consulted': {
       const agent = head.join(' ').trim();
       if (!agent) fail('usage: consulted <agent-name-or-id> [-- "<what the review said>"]\n' +
@@ -474,7 +497,7 @@ if (argv.length) {
         '☠️ The name is the point: the next review goes to the SAME agent by SendMessage so it ' +
         'keeps the history. A fresh agent starts blind and gives advice for a state that has moved.\n' +
         'If a review could not help right now, say so: consulted none -- "<why>".');
-      s.consult = { agent, at: Date.now(), atRecords: records(s), note: tail.join(' ').trim() };
+      s.consult = { agent, at: Date.now(), atRecords: records(s), note: tail.join(' ').trim(), pendingAt: 0 };
       s.consultAnnounced = false;
       break;
     }
@@ -515,8 +538,18 @@ if (argv.length) {
       const it = s.items.find((i) => i.id === id);
       if (!it) fail(`no item ${rest[0]}`);
       const text = rest.slice(1).join(' ');
-      if (cmd === 'note') { it.status = 'doing'; it.note = text; }
-      else if (cmd === 'wait') { it.status = 'waiting'; it.note = text || it.note; }
+      // ☠️ `note` RECORDS, IT DOES NOT REOPEN. The first version set status
+      // 'doing' unconditionally, so writing down what happened un-finished the
+      // item that had just been closed. Measured in one session: three items
+      // closed with `done` were silently reopened by the `note` that followed,
+      // and two `waiting` items were pulled back into the actionable list the
+      // same way - each time the Stop gate then demanded work on something
+      // already settled. Only a 'todo' is promoted; every other status stands.
+      if (cmd === 'note') {
+        if (it.status === 'todo') it.status = 'doing';
+        it.note = text;
+      }
+      else if (cmd === 'wait') { it.status = 'waiting'; it.note = text || it.note; it.waitAt = Date.now(); }
       else { it.status = 'dropped'; if (text) it.note = text; }
       break;
     }
@@ -642,7 +675,9 @@ process.stdin.on('end', () => {
           `Ask for one now, and put the CURRENT data in the prompt. ☠️ A review written against ` +
           `a state that has already moved answers that older state; that has already happened ` +
           `once in this run.\n\n  ${consultCall(s)}\n\n` +
-          `Then record it — this does not clear until you do:\n` +
+          `Mark it in flight the moment you send, or this repeats every turn while the ` +
+        `answer is on its way:\n  \`node "${__filename}" consulting <agent-name>\`\n` +
+        `Then record it — this does not clear until you do:\n` +
           `  \`node "${__filename}" consulted <agent-name> -- "<the headline findings>"\`\n` +
           `and turn what survives into plan items (\`add\`) or standing facts (\`measured\`). ` +
           `☠️ Check its numbers against this run's own measurements before adopting them — a ` +
