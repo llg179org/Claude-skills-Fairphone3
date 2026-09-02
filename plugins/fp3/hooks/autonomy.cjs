@@ -163,6 +163,47 @@ function resolveAny(s, p) {
   return '';
 }
 /** Returns {ok, why, kind}. Never throws. */
+// ☠️ THE HOOK CHECKS PROVENANCE; THESE TWO CHECK PLAUSIBILITY. Every guard here
+// used to ask "does the artefact exist" - and three times in one run the
+// artefact existed and the NUMBER in it was wrong. Full validity checking would
+// need the same domain reasoning that made the error, so it belongs to the
+// outside reviewer; but two sub-families are mechanical, and each cost a real
+// mistake in this run.
+
+// 1. MAGNITUDE. A voltage-slope method once produced "1806 mA" for a phone whose
+// whole battery is 2185 mAh. A ten-line table catches that class instantly.
+const BANDS = [
+  { re: /(-?\d+(?:[.,]\d+)?)\s*%/g, lo: 0, hi: 100, unit: '%', hard: true },
+  { re: /(-?\d+(?:[.,]\d+)?)\s*mAh/gi, lo: 0, hi: 3060, unit: 'mAh', hard: true },
+  { re: /(-?\d+(?:[.,]\d+)?)\s*mA\b/g, lo: -2500, hi: 400, unit: 'mA', hard: false },
+];
+function magnitudeLint(text) {
+  const out = [];
+  for (const b of BANDS) {
+    b.re.lastIndex = 0;
+    let m;
+    while ((m = b.re.exec(text))) {
+      const v = parseFloat(m[1].replace(',', '.'));
+      if (!isFinite(v)) continue;
+      if (v < b.lo || v > b.hi) {
+        out.push({ hard: b.hard, msg: `${m[1]} ${b.unit} is outside the plausible ` +
+          `${b.lo}..${b.hi} ${b.unit} for this device` });
+      }
+    }
+  }
+  return out;
+}
+
+// 2. SCOPE. The most repeated mistake in this project is a claim whose quantifier
+// is stronger than the experiment: one boot's state stated as the phone's
+// property (the speaker amp), a firmware restart read as reboot-persistence, a
+// banner believed over a grep. A claim carrying a universal word must say what
+// was actually varied.
+const UNIVERSAL = /\b(mindig|soha|perzisztens|t[uú]l[eé]li|NV-backed|always|never|persistent|permanent|survives|every boot|minden booton)\b/i;
+function scopeMissing(text) {
+  return UNIVERSAL.test(text) && !/scope:/i.test(text);
+}
+
 function checkEvidence(s, ev) {
   if (!ev) return { ok: false, why: 'no evidence given' };
   if (ev.startsWith('unverifiable:')) {
@@ -257,7 +298,15 @@ const CONSULT_GRACE_MIN = 20;
 function consultDue(s) {
   if (!s.active) return '';
   const c = s.consult || {};
-  if (c.pendingAt && (Date.now() - c.pendingAt) / 6e4 < CONSULT_GRACE_MIN) return '';
+  if (c.pendingAt) {
+    const mins = (Date.now() - c.pendingAt) / 6e4;
+    if (mins < CONSULT_GRACE_MIN) return '';
+    // ☠️ AN EXPIRED GRACE MUST NOT REPEAT "ASK FOR A REVIEW". The answer may
+    // still be coming, and a second agent started here would review a state that
+    // has moved - this repo's own dated trap. Escalate instead: chase the one
+    // that is out.
+    return `PENDING:${mins.toFixed(0)}`;
+  }
   if (!c.at) return 'no outside review has been recorded in this run yet';
   const dn = records(s) - (c.atRecords || 0);
   if (dn >= CONSULT_EVERY) return `${dn} results have been recorded since the last review`;
@@ -338,13 +387,19 @@ function renderPlan(s) {
   }
   if (waiting.length) {
     out.push('', 'WAITING — nothing to do on these; do not disturb what they measure:');
+    // ☠️ THE STALENESS FLAG MUST NOT BECOME THE NOISE IT REPLACED. With 25
+    // waiting items, flagging every old one rebuilds the wall of text this
+    // renderer exists to cut. Only the two oldest carry the question.
+    const flagged = new Set([...waiting].filter((i) => i.waitAt)
+      .sort((a, b) => a.waitAt - b.waitAt).slice(0, 2).map((i) => i.id));
     for (const i of [...waiting].sort(byPrio)) {
       // ☠️ A WAIT REASON GOES STALE SILENTLY. One item in this run waited all
       // day on "the 16:06 timer", which had fired that afternoon; another on
       // "the phone is busy until 16:02". Nothing re-reads a reason nobody is
       // shown, so an old one is surfaced with its age and a question.
       const h = i.waitAt ? (Date.now() - i.waitAt) / 36e5 : null;
-      const age = h != null && h >= 6 ? `  ⏳ ${h.toFixed(0)} h — is this reason still true?` : '';
+      const age = h != null && h >= 6 && flagged.has(i.id)
+        ? `  ⏳ ${h.toFixed(0)} h — is this reason still true?` : '';
       out.push(`  … ${i.id}. ${clip(i.text, 100)}${age}\n        ⟵ ${clip(i.note, 100) || 'reason unstated'}`);
     }
   }
@@ -481,13 +536,41 @@ if (argv.length) {
       if (!s.watch.includes(arg)) s.watch.push(arg);
       break;
     }
+    case 'reopen': {
+      // ☠️ THE OTHER HALF OF THE `note` FIX. Making `note` stop reopening items
+      // also removed the only way to reopen one on purpose - and in this run
+      // three finished claims were later overturned by new evidence. Without
+      // this the fix would trade "demands work on settled items" for the worse
+      // failure "leaves overturned work marked done". So: loud, reasoned, and it
+      // keeps the evidence that fell.
+      const id = Number(head[0]);
+      const it = s.items.find((i) => i.id === id);
+      if (!it) fail(`no item ${head[0]}`);
+      const why = head.slice(1).concat(tail).join(' ').trim();
+      if (!why) fail(`usage: reopen ${id} "<what overturned it>"\n` +
+        'Name the evidence that fell. Reopening without a reason is how a plan starts churning.');
+      const was = it.ev ? ` (was closed with ${it.ev})` : '';
+      it.status = 'todo';
+      it.note = `☠️ REOPENED: ${why}${was}`;
+      it.ev = '';
+      break;
+    }
     case 'consulting': {
       // ☠️ MARK IT WHEN YOU SEND, NOT WHEN IT ANSWERS. A review takes minutes to
       // come back; without this the gate re-fires on every Stop in between and
       // the same demand is read as three separate ones.
       const agent = head.join(' ').trim();
       if (!agent) fail('usage: consulting <agent-name-or-id>   (call it right after SendMessage)');
-      s.consult = Object.assign({}, s.consult, { agent, pendingAt: Date.now() });
+      // ☠️ IDEMPOTENT ON PURPOSE. A second call for the same agent refreshes the
+      // clock rather than recording a parallel request - two live reviews of one
+      // question duplicate the reviewer's work and leave the bookkeeping unable
+      // to say which finding answered which prompt.
+      const prev = s.consult || {};
+      s.consult = Object.assign({}, prev, {
+        agent,
+        pendingAt: prev.pendingAt && prev.agent === agent ? prev.pendingAt : Date.now(),
+        pendingRenewed: prev.pendingAt && prev.agent === agent ? Date.now() : 0,
+      });
       break;
     }
     case 'consulted': {
@@ -503,6 +586,18 @@ if (argv.length) {
     }
     case 'measured': case 'retracted': {
       const text = tail.join(' ').trim();
+      const lint = magnitudeLint(text);
+      const hard = lint.filter((l) => l.hard);
+      if (hard.length) fail('REFUSED: ' + hard.map((l) => l.msg).join('; ') +
+        '\nEither the number is wrong or the unit is - check it before it becomes a standing claim.');
+      for (const l of lint) console.error(`☠️ implausible: ${l.msg} — check it.`);
+      if (scopeMissing(text)) fail('REFUSED: this claim uses a universal word ' +
+        '(always / never / persistent / survives / NV-backed / mindig / soha / túléli) but says ' +
+        'nothing about what was actually varied.\n' +
+        '☠️ This is the most repeated mistake in this project: one boot\'s state stated as the ' +
+        'phone\'s property, and a firmware restart read as reboot-persistence.\n' +
+        'Add a `scope:` clause naming what the experiment varied — e.g. ' +
+        '"scope: measured across a modem firmware restart only, NOT across a reboot".');
       if (cmd === 'measured') {
         const ev = head.join(' ').trim();
         if (!ev || !text) fail('usage: measured <evidence> -- "<the claim that now stands>"');
@@ -668,6 +763,23 @@ process.stdin.on('end', () => {
     if (!due && s.consultAnnounced) { s.consultAnnounced = false; write(s); }
     if (due && !s.consultAnnounced && s.blocks < MAX_BLOCKS) {
       s.blocks += 1; s.consultAnnounced = true; write(s); flushStatus(s);
+      if (due.startsWith('PENDING:')) {
+        // ☠️ CHASE THE ONE THAT IS OUT; DO NOT START ANOTHER. A second reviewer
+        // asked the same question duplicates the work and, worse, answers a
+        // state that has moved - the dated trap in this repo's own notes.
+        process.stdout.write(JSON.stringify({
+          decision: 'block',
+          reason:
+            `A review has been out for ${due.slice(8)} minutes with ${(s.consult || {}).agent} ` +
+            `and has not been recorded.\n\n` +
+            `Do NOT start a second one. Either it is still working - say so and carry on - or ` +
+            `chase it at the SAME agent:\n  ${consultCall(s)}\n\n` +
+            `When it lands: \`node "${__filename}" consulted ${(s.consult || {}).agent} -- ` +
+            `"<the headline findings>"\`. If it will not land, close the loop honestly: ` +
+            `\`consulted none -- "<why>"\`.`,
+        }));
+        process.exit(0);
+      }
       process.stdout.write(JSON.stringify({
         decision: 'block',
         reason:
@@ -703,8 +815,10 @@ process.stdin.on('end', () => {
         `outside this session:\n` +
         [...waiting].sort(byPrio).map((i) =>
           `  … ${i.id}. ${clip(i.text, 90)}\n        ⟵ ${clip(i.note, 90) || 'reason unstated'}`).join('\n') +
-        `\nNot blocking - there is nothing to do until those return. Say plainly what is ` +
-        `being waited on and roughly when, then stop.`);
+        `\nNot blocking, and no reply is owed. ☠️ A gate that can be satisfied with text ` +
+        `teaches writing, not working: pass it by mutating state (done / wait / drop / reopen), ` +
+        `never by narrating. Tell the user something when a measurement turned or they asked - ` +
+        `not to prove you are alive.`);
       process.exit(0);
     }
     if (!open.length) {
