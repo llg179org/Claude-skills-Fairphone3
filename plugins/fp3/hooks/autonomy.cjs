@@ -883,29 +883,37 @@ process.stdin.on('end', () => {
   // first. Asking and then acting is the same as not asking.
   if (ev.hook_event_name === 'PreToolUse') {
     const cmd = String((ev.tool_input || {}).command || '');
-    const LONG = /(systemd-run[^\n]*--unit=)|((ims-ma|ims-ab|modem-night|modem-window|band-ladder|sleep-night|modem-core|duty-vs-uptime|mode-ladder)\S*\.sh)/;
-    const c = s.consult || {};
-    if (s.active && c.pendingAt && LONG.test(cmd)) {
-      const mins = ((Date.now() - c.pendingAt) / 6e4).toFixed(0);
+
+    // ☠️ RECOGNISE THE BYPASS, NOT THE WORK. The first version matched script
+    // names and "long-looking" commands, which is brittle in the worst way: a new
+    // script is simply not in the list and the gate silently stops protecting.
+    // The checks themselves now live in tools/fp3-measure, where they bind
+    // whoever calls them - a second terminal, a hand-typed ssh - instead of only
+    // this session. So the only thing left for a session hook to notice is
+    // someone going around that door.
+    const RAW_LAUNCH = /\b(systemd-run|nohup|setsid)\b/;
+    const TO_DEVICE = /\b(ssh\s|scp\s|fp3[:\s]|172\.16\.42\.1|192\.168\.100\.17)/;
+    if (s.active && RAW_LAUNCH.test(cmd) && TO_DEVICE.test(cmd) && !/fp3-measure/.test(cmd)) {
       process.stdout.write(JSON.stringify({
         hookSpecificOutput: {
           hookEventName: 'PreToolUse',
           permissionDecision: 'deny',
           permissionDecisionReason:
-            `A review has been out with ${c.agent} for ${mins} min and this command starts ` +
-            `something long on the device.\n\n` +
-            `☠️ You asked, then acted before the answer came - and that has already cost a run ` +
-            `today: a 75-minute census was launched minutes before the review said its alarm ` +
-            `length was wrong, by which time the phone was inside its own sleep cycles and ` +
-            `could not be reached to stop it.\n\n` +
-            `Wait for the answer. If it genuinely cannot bear on this measurement, close the ` +
-            `loop honestly first and the gate opens:\n` +
-            `  node "${__filename}" consulted ${c.agent} -- "<the findings>"\n` +
-            `  node "${__filename}" consulted none -- "<why it cannot help here>"`,
+            `This starts something on the phone directly instead of through the one door.\n\n` +
+            `  docs/power/bringup/tools/fp3-measure <eta-minutes> <script-on-device> [args...]\n\n` +
+            `☠️ The wrapper refuses what a hook cannot see: it checks whether a review is still ` +
+            `out (a 75-minute census was launched today minutes before the answer said its alarm ` +
+            `length was wrong), whether the phone is already measuring, and whether the phone is ` +
+            `merely UNREACHABLE - which is not the same as idle, and reads as idle to a naive ` +
+            `check. It also requires an ETA, because a measurement nobody can watch is one ` +
+            `nobody notices failing.\n\n` +
+            `A one-off command that is genuinely not a measurement can be phrased without ` +
+            `systemd-run / nohup / setsid.`,
         },
       }));
       process.exit(0);
     }
+
     process.exit(0);
   }
 
