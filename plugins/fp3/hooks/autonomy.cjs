@@ -809,8 +809,15 @@ function renderPlan(s) {
       // "the phone is busy until 16:02". Nothing re-reads a reason nobody is
       // shown, so an old one is surfaced with its age and a question.
       const h = i.waitAt ? (Date.now() - i.waitAt) / 36e5 : null;
+      // ☠️ SHOW THE DATE WHEN IT IS NOT TODAY. Rendering a two-day deadline as a
+      // bare clock time made "--until 2d" print "back at 10:24 AM" - i.e. a wait
+      // set for Thursday looked like one expiring in minutes. A deadline that
+      // reads as the wrong day is worse than none, because it is believed.
       const age = i.waitUntil
-        ? `  ⏰ back at ${new Date(i.waitUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+        ? `  ⏰ back at ${new Date(i.waitUntil).toLocaleString([],
+            new Date(i.waitUntil).toDateString() === new Date().toDateString()
+              ? { hour: '2-digit', minute: '2-digit' }
+              : { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`
         : (h != null && h >= 2 && flagged.has(i.id)
           ? `  ⏳ ${h.toFixed(0)} h, and NO --until — is this reason still true?` : '');
       out.push(`  … ${i.id}. ${clip(i.text, 100)}${age}\n        ⟵ ${clip(i.note, 100) || 'reason unstated'}`);
