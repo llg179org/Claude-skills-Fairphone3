@@ -421,6 +421,39 @@ grep-able breadcrumb (`dev_info(dev, "DBG …")`) so the capture can *prove the 
 path ran* — otherwise a null result is ambiguous between "hypothesis wrong" and
 "code didn't execute".
 
+### Step 0b — For a measurement longer than an hour, pre-register the NUMBERS, not just pass/fail
+
+Step 0's "pass vs fail in advance" is enough for a one-shot check. It is not
+enough for an unattended block — an overnight ladder, a multi-boot replication, a
+census — because such a run produces a *distribution*, and a distribution can be
+told almost any story after the fact. The failure mode is not lying; it is that
+the first coherent reading of a rich dataset feels like a discovery, and there is
+nothing left to contradict it.
+
+So before the data exists, write into the capture directory and **commit**:
+
+1. **A segment table** — what the run does, in what order, for how long, read out
+   of the script's source rather than from memory. This is also when structural
+   surprises surface, while they are still cheap.
+2. **A predicted band per segment**, with the reasoning that produced it. Bands,
+   never point values: a point estimate cannot be wrong in an informative way.
+3. **The acceptance threshold, stated in advance** — how close the two sides of a
+   balance must land for you to call it closed. Written after the numbers, this
+   is the one that silently moves.
+4. **Where your prediction differs from a reviewer's, and why.** If the run lands
+   on their band instead of yours, the pre-registration tells you *which
+   assumption* was wrong; without it you will simply adopt the winning number.
+
+☠️ **Predict the term you have never measured, most of all.** Every long run has
+one segment nobody has instrumented — the reboot burst, the resume transient, the
+convergence wait. That is where your band will be widest and where the difference
+between "the model was wrong" and "one unmeasured term was cheaper than assumed"
+is decided. Naming it in advance turns a post-hoc excuse into a result.
+
+A run whose numbers land inside bands written before it started is not merely
+measured. It is **predicted**, which is the strongest thing a single night can
+produce — and it costs nothing but the hour while the phone is already busy.
+
 ### Step 0a — ☠️ Re-measure that the bug still reproduces, before you build the fix
 A parked item carries a diagnosis, and a diagnosis has a shelf life. The device
 has moved since it was written: a different kernel, a different userspace
