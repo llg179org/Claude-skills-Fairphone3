@@ -960,6 +960,26 @@ if (argv.length) {
     case 'start':
       Object.assign(s, empty(), { active: true, goal: arg || s.goal });
       break;
+    // ☠️ A GOAL THAT CANNOT BE EDITED IS A GOAL THAT GOES STALE, AND THE ONLY WAY
+    // TO CHANGE IT WAS `start`, WHICH DELETES EVERY ITEM. So when the objective
+    // moved - 2026-09-02: "shortest possible testing time" became a cost, where
+    // night-long legs had been priced at zero - the header kept announcing the old
+    // one above a list built for it, and the list is read against that header every
+    // single turn. Editing the goal has to be cheaper than restarting the run, or
+    // the run silently optimises for a target nobody holds any more.
+    case 'goal': {
+      if (!arg) fail('usage: goal "<the objective function, in the words it was given>"\n' +
+        'This does NOT touch the items. Re-rank them yourself afterwards: a new goal that ' +
+        'leaves the old ordering in place has changed a caption, not a plan.');
+      const was = s.goal;
+      s.goal = arg;
+      s.goalHistory = (s.goalHistory || []).concat({ t: Date.now(), from: was, to: arg });
+      console.error('goal changed. ☠️ The items were NOT re-ranked - that is deliberate, ' +
+        'because only you know which of them the new goal makes pointless. Walk the list ' +
+        'now and drop what no longer produces a decision; a goal change that adds no `drop` ' +
+        'is usually a goal change that has not been believed.');
+      break;
+    }
     case 'add': {
       const ai = rest.indexOf('--after');
       const pre = ai < 0 ? [] : parseIds(rest[ai + 1]);
@@ -1223,7 +1243,7 @@ if (argv.length) {
     case 'flush': case 'show':
       break;
     default:
-      console.error('usage: start|add|note|wait|human|after|unafter|done|drop|measured|retracted|consulted|status|watch|flush|show|stop');
+      console.error('usage: start|goal|add|note|wait|human|after|unafter|done|drop|measured|retracted|consulted|status|watch|flush|show|stop');
       process.exit(2);
   }
   if (cmd !== 'show') {
