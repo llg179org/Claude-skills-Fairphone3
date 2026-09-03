@@ -79,10 +79,22 @@ function unrecorded() {
   // ☠️ EXCLUDE NOTHING BY GUESSING, BUT DO EXCLUDE WHAT THIS HOOK ITSELF WRITES.
   // The predecessor had to learn that a gate counting its own output is a gate
   // that can never be cleared, which trains the reader to ignore the channel.
-  const dirty = git('status', '--porcelain', '--', 'docs').trim();
-  if (dirty) {
-    const lines = dirty.split('\n').slice(0, 8);
-    out.push(`uncommitted under ${REPO}/docs:\n     ${lines.join('\n     ')}`);
+  // ☠️ TWO LANES, TWO RECORDS. Measured 2026-09-03: an edit to
+  // docs/upstreaming/STATUS.md was blocked as an "unrecorded result" and told to
+  // write a findings-log entry about power captures. Uncommitted STATUS rows are
+  // a real loss too (a review round noted and then compacted away), but the
+  // instruction is a different one, so the two are reported apart and the
+  // remaining docs/ (the dossiers) are not treated as landed measurements.
+  const dirtyPower = git('status', '--porcelain', '--', 'docs/power', ...WATCH.map((w) => w)).trim();
+  if (dirtyPower) {
+    const lines = [...new Set(dirtyPower.split('\n'))].slice(0, 8);
+    out.push(`uncommitted under ${REPO}/docs/power:\n     ${lines.join('\n     ')}`);
+  }
+  const dirtyUp = git('status', '--porcelain', '--', 'docs/upstreaming').trim();
+  if (dirtyUp) {
+    const lines = dirtyUp.split('\n').slice(0, 8);
+    out.push(`UPSTREAMING: uncommitted under ${REPO}/docs/upstreaming — a STATUS.md row ` +
+      `(round, test, dependency) is the record; commit it:\n     ${lines.join('\n     ')}`);
   }
   // A capture directory with no README is a measurement nobody has read — but
   // ONLY one newer than the dated record.
@@ -253,13 +265,17 @@ function main() {
   // already written down; blocking on advice is how a channel gets skimmed. Only
   // an unrecorded result holds the turn, because that is the one with a measured
   // record of catching real losses.
+  const onlyUp = un.length && un.every((u) => u.startsWith('UPSTREAMING:'));
   const body =
     (un.length ? `Results have landed that nothing records:\n  - ${un.join('\n  - ')}\n\n` +
       `Write them down before the turn ends — an auto-compaction here loses them.\n` +
-      `  raw data → docs/power/bringup/captures/<date>_<name>/ with its own README.md\n` +
-      `  the dated finding → docs/power/bringup/findings-log.md\n` +
-      `  what the phone does TODAY → docs/power/README.md\n` +
-      `☠️ Never delete a disproven claim; write why it fell.\n\n` : '') +
+      (onlyUp
+        ? `  docs/upstreaming/STATUS.md — the Rounds row (lore link), the Test block, or the ` +
+          `D- entry; then commit. Method: the msm8953-mainline-pr skill, "Tracking the submissions".\n\n`
+        : `  raw data → docs/power/bringup/captures/<date>_<name>/ with its own README.md\n` +
+          `  the dated finding → docs/power/bringup/findings-log.md\n` +
+          `  what the phone does TODAY → docs/power/README.md\n` +
+          `☠️ Never delete a disproven claim; write why it fell.\n\n`) : '') +
     (lints.length ? `And check these, in what is already written (advice, not a block):\n` +
       `  - ${lints.join('\n  - ')}\n` : '');
 

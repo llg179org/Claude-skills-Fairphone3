@@ -139,9 +139,9 @@ const readClaims = () => {
 function writeClaims(c) {
   try {
     fs.mkdirSync(STATE_DIR, { recursive: true });
-    if (!('__completed' in c)) {
-      const prev = readClaims().__completed;
-      if (prev) c = Object.assign({}, c, { __completed: prev });
+    const prevAll = readClaims();
+    for (const k of ['__completed', '__device']) {
+      if (!(k in c) && prevAll[k]) c = Object.assign({}, c, { [k]: prevAll[k] });
     }
     const tmp = `${CLAIMS}.${process.pid}`;
     fs.writeFileSync(tmp, JSON.stringify(c, null, 1));
@@ -153,13 +153,45 @@ function writeClaims(c) {
 function liveClaims() {
   const c = readClaims(), out = {}, cut = Date.now() - CLAIM_TTL_MIN * 60000;
   for (const [id, v] of Object.entries(c)) {
-    if (id === '__completed') continue;          // a different record with its own life
+    if (id.startsWith('__')) continue;           // a different record with its own life
     if (v && v.at > cut) out[id] = v;
   }
   return out;
 }
 // Completions expire on the affinity window, not the claim TTL: the claim is
 // "I am on it", the completion is "I still remember it".
+// The device lease: who holds the phone, through which task, since when. It
+// expires with the claim TTL, and a running measurement counts as held by
+// whoever started it (measurement-watch keeps no session, so it reads as "busy,
+// not yours" to everyone - which is the safe reading).
+function deviceLease() {
+  const c = readClaims();
+  const d = c.__device;
+  if (d && d.at > Date.now() - CLAIM_TTL_MIN * 60000) return d;
+  return null;
+}
+function measurementRunning() {
+  try {
+    const m = JSON.parse(fs.readFileSync(MEAS, 'utf8'));
+    const cut = Date.now() - 6 * 60 * 60 * 1000;
+    return Object.keys(m).filter((u) => m[u] && !m[u].done && (m[u].started || 0) > cut);
+  } catch { return []; }
+}
+function deviceBusy(me) {
+  const d = deviceLease();
+  if (d && d.session !== me) return `leased to ${d.session} (task ${d.task})`;
+  const run = measurementRunning();
+  if (run.length && !(d && d.session === me)) return `measurement running: ${run.join(', ')}`;
+  return '';
+}
+function laneOf(me, all) {
+  const env = String(process.env.FP3_LANE || '').toLowerCase();
+  if (LANES.includes(env) && env !== 'any') return env;
+  const st = all && all[me];
+  if (st && LANES.includes(st.lane) && st.lane !== 'any') return st.lane;
+  return '';
+}
+
 function completions() {
   const c = (readClaims().__completed) || {}, out = {}, cut = Date.now() - AFFINITY_MIN * 60000;
   for (const [id, v] of Object.entries(c)) if (v && v.at > cut) out[id] = v;
@@ -187,7 +219,23 @@ function completions() {
 // `after:` for affinity would hand the agent that ran the replication a kernel
 // patch because both mention 85. Only the author knows which follow-on carries
 // the same context, so the author says so.
-const KEYS = ['after', 'continues', 'until', 'when', 'they-do', 'why'];
+// ☠️ `lane:` IS THE ONE KEY THAT KNOWS ABOUT THE PHONE. Two kinds of work now run
+// side by side - the upstreaming (mail, b4, the STATUS page: needs no device) and
+// the power/bring-up measurements (needs THE phone, of which there is one). With
+// no lane, whichever window stopped first was handed whichever task was on top:
+// an upstreaming window got a flash-and-reboot, and two phone tasks could be
+// dispatched to two windows and collide on the device mid-measurement (it has
+// happened: "two sets of hands on one phone"). So: `lane: phone` marks a task
+// that touches the device, `lane: upstreaming` one that must not, and a task
+// with no lane is anybody's. A window declares its own lane (FP3_LANE=… in the
+// environment, or `queue.cjs lane phone|upstreaming|any`) and is only handed
+// tasks of that lane or of none. And the phone itself is a LEASE: claiming a
+// `lane: phone` task takes it, `done`/`release` gives it back, a running
+// unattended measurement (measurement-watch's state) holds it too - and no other
+// window is handed a phone task while it is held.
+const KEYS = ['after', 'continues', 'until', 'when', 'they-do', 'why', 'lane'];
+const LANES = ['phone', 'upstreaming', 'any'];
+const MEAS = path.join(STATE_DIR, 'fp3-measurements.json');
 
 // How long a finished task's context is worth reusing, and how long its successor
 // is held for the session that earned it. ☠️ Short on purpose: a session that
@@ -313,11 +361,13 @@ function expired(tasks) {
     parseUntil(t.until) && parseUntil(t.until) < Date.now());
 }
 
-function report(tasks, me) {
+function report(tasks, me, lane) {
   const byId = new Map(tasks.filter((t) => t.id != null).map((t) => [t.id, t]));
   const claims = liveClaims();
   const done = completions();
-  const ready = [], blocked = [], waiting = [], human = [], held = [], refused = [];
+  const busy = deviceBusy(me);
+  const ready = [], blocked = [], waiting = [], human = [], held = [], refused = [],
+    otherLane = [], device = [];
   for (const t of tasks) {
     if (t.mark === 'x') continue;
     if (t.mark === '@') { human.push(t); continue; }
@@ -330,6 +380,10 @@ function report(tasks, me) {
       // Mine is still mine: a window re-reading its own claim must get its task
       // back, or a second Stop in the same session would hand it something else.
       if (cl && me && cl.session !== me) { held.push({ t, cl }); continue; }
+      // ☠️ THE LANE FILTER COMES BEFORE FIRST REFUSAL: a task in the wrong lane is
+      // not "held briefly", it is never this window's.
+      if (lane && t.lane && t.lane !== 'any' && t.lane !== lane) { otherLane.push(t); continue; }
+      if (t.lane === 'phone' && busy) { device.push(t); continue; }
       // ☠️ FIRST REFUSAL FOR THE SESSION THAT EARNED IT. When two agents finish at
       // the same moment, whichever one stops first would otherwise take the
       // other's follow-on - and a follow-on handed to an empty context is paid for
@@ -350,7 +404,7 @@ function report(tasks, me) {
   // is the priority a person set, and a scheduler that reorders on its own guesses
   // is a scheduler nobody can predict.
   ready.sort((a, b) => (b._mine ? 1 : 0) - (a._mine ? 1 : 0));
-  return { ready, blocked, waiting, human, held, refused, byId,
+  return { ready, blocked, waiting, human, held, refused, otherLane, device, busy, lane, byId,
     cycles: cycles(tasks), expired: expired(tasks) };
 }
 
@@ -381,6 +435,14 @@ function idleText(r, tasks) {
   if (r.held.length) {
     parts.push(`${r.held.length} claimed by another window (` +
       r.held.map(({ t, cl }) => `${t.id}→${cl.session}`).join(', ') + ')');
+  }
+  if (r.otherLane.length) {
+    parts.push(`${r.otherLane.length} in another lane than this window's (${r.lane}): ` +
+      r.otherLane.map((t) => `${t.id}[${t.lane}]`).join(', '));
+  }
+  if (r.device.length) {
+    parts.push(`${r.device.length} need the phone and the phone is ${r.busy}: ` +
+      r.device.map((t) => t.id).join(', '));
   }
   lines.push(parts.length
     ? `IDLE — nothing can be started here: ${parts.join(', ')}.`
@@ -437,7 +499,19 @@ function main() {
     if (cli) { console.error(err); process.exit(1); }
     process.exit(0);
   }
-  const r = report(tasks, me);
+  // `lane <phone|upstreaming|any>` - this window's lane, kept per session.
+  if (cli === 'lane') {
+    const v = String(process.argv[3] || '').toLowerCase();
+    if (!LANES.includes(v)) { console.error(`usage: lane <${LANES.join('|')}>`); process.exit(1); }
+    const all = readState();
+    (all[me] || (all[me] = {})).lane = v;
+    writeState(all);
+    console.log(`lane of ${me || '(no session id)'} = ${v}` +
+      (process.env.FP3_LANE ? `  (FP3_LANE=${process.env.FP3_LANE} in the environment wins)` : ''));
+    process.exit(0);
+  }
+  const lane = laneOf(me, readState());
+  const r = report(tasks, me, lane);
 
   // ☠️ EVERY WRITE TO THE QUEUE GOES THROUGH HERE, not only `done`. Agents add
   // tasks, change `after:` and close items, from several windows at once; an
@@ -455,6 +529,22 @@ function main() {
       let next = body;
 
       if (cli === 'add') {
+        // validated below through KEYS; `lane:` gets its value checked here
+        // because a misspelt lane would silently mean "anybody's".
+        // ☠️ THE KEYS ARRIVE AS ONE `;`-SEPARATED ARGUMENT, so the value has to be
+        // cut at the `;` before it is judged — the first version compared
+        // "upstreaming;" against the list and refused every valid lane.
+        // ☠️ AND ONLY THE PART AFTER `--` IS KEYS: joined whole, the task text
+        // sat in front of "lane:" and the anchored match never saw it, so a bogus
+        // lane went straight into the queue (task 132, dropped).
+        {
+          const av = process.argv.slice(3), s = av.indexOf('--');
+          const keyStr = s < 0 ? '' : av.slice(s + 1).join(' ');
+          for (const k of keyStr.split(/\s*;\s*/)) {
+            const m = /^\s*lane:\s*(\S+)\s*$/.exec(k);
+            if (m && !LANES.includes(m[1])) return `lane must be one of ${LANES.join('|')}`;
+          }
+        }
         const argv = process.argv.slice(3);
         const sep = argv.indexOf('--');
         const text = (sep < 0 ? argv : argv.slice(0, sep)).join(' ').trim();
@@ -481,6 +571,7 @@ function main() {
         } else {
           const key = process.argv[4], val = process.argv.slice(5).join(' ').trim();
           if (!KEYS.includes(key)) return `usage: set <id> <${KEYS.join('|')}> <value>`;
+          if (key === 'lane' && val && !LANES.includes(val)) return `lane must be one of ${LANES.join('|')}`;
           const at = body.search(line);
           const after = body.slice(at);
           const endOfTask = after.slice(1).search(/\n\s*-\s*\[[ x~@]\]|\n\S/);
@@ -517,14 +608,16 @@ function main() {
   // under the lock and touches ONE line. The alternative - rewriting TODO.md whole
   // from two windows - is last-writer-wins with silent loss, and that is how the
   // queue itself would be corrupted by the very concurrency this release adds.
-  if (cli === 'done' || cli === 'release') {
+  // `drop <id>` — remove a task that should never have been added, without an
+  // archive entry. `done` is for work that happened; this is for a typo.
+  if (cli === 'done' || cli === 'release' || cli === 'drop') {
     const id = Number(process.argv[3]);
     if (!id) { console.error(`usage: ${cli} <id>`); process.exit(1); }
     const out = withLock(() => {
       const cur = fs.readFileSync(TODO, 'utf8');
       const re = new RegExp(`^(\\s*-\\s*\\[)[ x~@](\\]\\s*${id}\\.)`, 'm');
       if (!re.test(cur)) return `no task ${id} in the queue`;
-      if (cli === 'done') {
+      if (cli === 'done' || cli === 'drop') {
         // Cut the whole task block - the checkbox line and its indented keys.
         const b = cur.indexOf(BEGIN), e = cur.indexOf(END);
         const body = cur.slice(b + BEGIN.length, e);
@@ -547,6 +640,15 @@ function main() {
         // together, so the order decides which way a crash fails. Appending first
         // risks a duplicate entry - visible, and removable by hand. Removing first
         // risks losing the record entirely. A duplicate beats a loss.
+        if (cli === 'drop') {
+          const tmp0 = `${TODO}.${process.pid}`;
+          fs.writeFileSync(tmp0, nextTodo); fs.renameSync(tmp0, TODO);
+          const c0 = liveClaims(); delete c0[String(id)];
+          const l0 = readClaims().__device;
+          c0.__device = (l0 && Number(l0.task) === id) ? null : l0;
+          writeClaims(c0);
+          return `${id} dropped (not archived)`;
+        }
         let done = '';
         try { done = fs.readFileSync(DONE_FILE, 'utf8'); } catch { done = ''; }
         if (!done.includes(DONE_HEAD)) {
@@ -590,6 +692,9 @@ function main() {
       // window than the one that did it.
       const owner = (c[String(id)] && c[String(id)].session) || me;
       delete c[String(id)];
+      // The phone goes back with the task that held it.
+      const lease = readClaims().__device;
+      c.__device = (lease && Number(lease.task) === id) ? null : lease;
       const prev = readClaims().__completed || {};
       if (cli === 'done') prev[String(id)] = { session: owner, at: Date.now() };
       c.__completed = prev;
@@ -604,6 +709,9 @@ function main() {
   if (cli === 'claims') {
     const c = liveClaims();
     const e = Object.entries(c);
+    const d = deviceLease(), run = measurementRunning();
+    console.log(`phone: ${d ? `leased to ${d.session} via task ${d.task}` : 'free'}` +
+      (run.length ? `; measurement running: ${run.join(', ')}` : ''));
     if (!e.length) { console.log('no live claims'); process.exit(0); }
     for (const [id, v] of e.sort((a, b) => a[1].at - b[1].at)) {
       console.log(`  ${id}. held by ${v.session} for ${((Date.now() - v.at) / 6e4).toFixed(0)} min` +
@@ -618,9 +726,13 @@ function main() {
       console.log(r.ready.length ? describe(r.ready[0]) : idleText(r, tasks));
     } else {
       console.log(`${r.ready.length} ready · ${r.blocked.length} blocked · ` +
-        `${r.waiting.length} waiting · ${r.human.length} with a person`);
+        `${r.waiting.length} waiting · ${r.human.length} with a person` +
+        `   (this window: lane ${r.lane || 'any'}; phone ${r.busy || 'free'})`);
       for (const t of r.ready) console.log(`  [${t._mine ? '★' : ' '}] ${t.id}. ${t.text}` +
+        (t.lane ? `   [${t.lane}]` : '') +
         (t._mine ? '   ← continues work this session finished' : ''));
+      for (const t of r.otherLane) console.log(`  [≠] ${t.id}. ${clip(t.text, 60)}   ← lane ${t.lane}, not this window's`);
+      for (const t of r.device) console.log(`  [☎] ${t.id}. ${clip(t.text, 60)}   ← needs the phone; ${r.busy}`);
       for (const t of r.blocked) console.log(`  [⛔] ${t.id}. ${t.text}   ← after ${t._b.open.join(', ')}`);
       for (const t of r.waiting) console.log(`  [~] ${t.id}. ${t.text}${t.until ? `   ← until ${t.until}` : ''}`);
       for (const t of r.human) console.log(`  [@] ${t.id}. ${t.text}`);
@@ -705,6 +817,12 @@ function main() {
     const key = String(r.ready[0].id);
     if (c[key] && c[key].session !== me) return false;
     c[key] = { session: me, at: Date.now(), text: clip(r.ready[0].text, 60) };
+    if (r.ready[0].lane === 'phone') {
+      // re-read inside the lock: the phone may have been taken since report()
+      const d = readClaims().__device;
+      if (d && d.session !== me && d.at > Date.now() - CLAIM_TTL_MIN * 60000) return false;
+      c.__device = { session: me, at: Date.now(), task: r.ready[0].id };
+    }
     writeClaims(c);
     return true;
   });
@@ -735,12 +853,21 @@ function main() {
       // the task; it cannot know what the work MEANT. That judgement is the
       // agent's, and it has to arrive with the task rather than later from a
       // different gate, or it arrives after the context that could make it.
-      `☠️ Closing is not only the marker. Whatever this task measured goes, by ` +
-      `hand, to:\n` +
-      `  raw data → docs/power/bringup/captures/<date>_<name>/ with its own README.md\n` +
-      `  the dated finding → docs/power/bringup/findings-log.md\n` +
-      `  docs/power/README.md — ONLY if it changes what the phone does today\n` +
-      `  never delete a disproven claim; write down why it fell\n\n` +
+      (r.ready[0].lane === 'upstreaming'
+        ? `☠️ Closing is not only the marker. What this task produced goes, by hand, ` +
+          `to docs/upstreaming/STATUS.md — the series' Rounds row (lore link), Test ` +
+          `block, To do/Done, or the D- entry — and is committed. Method: the ` +
+          `msm8953-mainline-pr skill, "Tracking the submissions". Never touch the phone ` +
+          `from this lane.\n\n`
+        : `☠️ Closing is not only the marker. Whatever this task measured goes, by ` +
+          `hand, to:\n` +
+          `  raw data → docs/power/bringup/captures/<date>_<name>/ with its own README.md\n` +
+          `  the dated finding → docs/power/bringup/findings-log.md\n` +
+          `  docs/power/README.md — ONLY if it changes what the phone does today\n` +
+          `  never delete a disproven claim; write down why it fell\n` +
+          (r.ready[0].lane === 'phone'
+            ? `  (this task holds the phone lease; \`done\`/\`release\` gives it back)\n\n`
+            : '\n')) +
       `If it turns out not to be startable, say so by changing its marker rather ` +
       `than by writing a note:\n` +
       `  node "${__filename}" mark ${r.ready[0].id} '~'   +  set ${r.ready[0].id} until <when>` +

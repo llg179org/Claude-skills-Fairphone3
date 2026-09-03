@@ -116,8 +116,14 @@ process.stdin.on('end', () => {
         `Start a background watcher for it in this same response, so the result arrives on its own ` +
         `and the user does not have to ask whether it finished — e.g. Bash with run_in_background: ` +
         `\`for i in 1 2 3 4 5 6; do case "$(fp3-ssh "systemctl show -p ActiveState --value ${orphans[0]}" 2>/dev/null | tail -1)" in active|activating) break;; esac; sleep 10; done; until case "$(fp3-ssh "systemctl show -p ActiveState --value ${orphans[0]}" 2>/dev/null | tail -1)" in inactive|failed) true;; *) false;; esac; do sleep 60; done; <report>\`. ` +
-        `☠️ BOTH halves matter and they pull opposite ways, so the loop needs both. (1) Wait for the unit to APPEAR first: \`systemctl show -p ActiveState\` answers \`inactive\` for a unit that does not exist yet, so a watcher started in the same breath as \`systemd-run\` exits on its first poll - measured 2026-08-30 on \`railcensus\`, where the fetch returned 4 lines of a file that ended up 1634 lines long. (2) Then end the loop ONLY on a definite finished state (\`inactive|failed\`), never on "not in the running set": an empty or errored reply means the device is unreachable, which for a sleep measurement is when it is working - measured 2026-08-30 on \`step0ctl\`, reported finished 11 seconds into a 90-minute run because one poll came back empty.`
-        `☠️ Match the FINISHED states explicitly. \`!= active\` treats an empty or errored reply as "done", and the reply is empty exactly when the device is unreachable — which, for a sleep measurement, is when it is working. That reported a running measurement as finished. ` +
+        `☠️ BOTH halves matter and they pull opposite ways, so the loop needs both. (1) Wait for the unit to APPEAR first: \`systemctl show -p ActiveState\` answers \`inactive\` for a unit that does not exist yet, so a watcher started in the same breath as \`systemd-run\` exits on its first poll - measured 2026-08-30 on \`railcensus\`, where the fetch returned 4 lines of a file that ended up 1634 lines long. (2) Then end the loop ONLY on a definite finished state (\`inactive|failed\`), never on "not in the running set": an empty or errored reply means the device is unreachable, which for a sleep measurement is when it is working - measured 2026-08-30 on \`step0ctl\`, reported finished 11 seconds into a 90-minute run because one poll came back empty. ` +
+        // ☠️ TWO TEMPLATE LITERALS WITH NO `+` BETWEEN THEM ARE A TAGGED-TEMPLATE
+        // CALL, not a concatenation. `node --check` passes, and the hook then threw
+        // "... is not a function" on exactly the path it exists for — a launch with
+        // no watcher — so the state was never written and the Stop gate never fired.
+        // Found 2026-09-03 by feeding the hook a synthetic launch; the gate had been
+        // silently dead since the paragraph was added. A hook's positive path has to
+        // be run once, not only parsed.
         `☠️ Do NOT poll with \`systemctl is-active\`: it exits non-zero once the unit stops, and an ssh wrapper that retries on failure then loops forever — the watcher hangs at exactly the moment the measurement finishes. \`systemctl show -p ActiveState\` always exits 0. ` +
         `Also tell the user roughly when it will finish.`
       );
