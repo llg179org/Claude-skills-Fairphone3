@@ -166,6 +166,7 @@ function parseUntil(v) {
   return 0;
 }
 
+const clip = (t, n) => (String(t || '').length > n ? String(t).slice(0, n - 1) + '…' : String(t || ''));
 const untilStr = (ms) => {
   const m = ms / 6e4;
   return m < 1 ? '<1 min' : m < 90 ? `${m.toFixed(0)} min` : `${(m / 60).toFixed(1)} h`;
@@ -192,6 +193,17 @@ function nextUp(tasks) {
   return c[0] || null;
 }
 
+// ☠️ AN EXPIRED `until:` IS NOT A WAIT, IT IS A TASK NOBODY LOOKED AT AGAIN.
+// autonomy.cjs swept these and made the item actionable again; here the marker is
+// a person's word in a file, so the hook must not rewrite it - but staying silent
+// turns "back at 10:24" into a permanent parking space, which is exactly the rot
+// the prose-scheduling it replaced used to have. It says so and leaves the edit
+// to a human.
+function expired(tasks) {
+  return tasks.filter((t) => t.mark === '~' && t.until &&
+    parseUntil(t.until) && parseUntil(t.until) < Date.now());
+}
+
 function report(tasks) {
   const byId = new Map(tasks.filter((t) => t.id != null).map((t) => [t.id, t]));
   const ready = [], blocked = [], waiting = [], human = [];
@@ -204,7 +216,7 @@ function report(tasks) {
     else if (t.mark === '~') waiting.push(t);
     else ready.push(t);
   }
-  return { ready, blocked, waiting, human, byId, cycles: cycles(tasks) };
+  return { ready, blocked, waiting, human, byId, cycles: cycles(tasks), expired: expired(tasks) };
 }
 
 function idleText(r, tasks) {
@@ -213,6 +225,11 @@ function idleText(r, tasks) {
   if (r.cycles.length) {
     lines.push(`☠️ CIRCULAR \`after:\` — these can never start, and it does not look ` +
       `different from waiting:\n  ${r.cycles.join('\n  ')}`);
+  }
+  if (r.expired.length) {
+    lines.push('☠️ `until:` has passed and the marker still says waiting — decide, do ' +
+      'not let it park:\n  ' + r.expired.map((t) =>
+        `${t.id}. ${clip(t.text, 70)}  (until ${t.until})`).join('\n  '));
   }
   lines.push(r.waiting.length || r.blocked.length || r.human.length
     ? `IDLE — nothing can be started here: ${r.waiting.length} waiting on something outside ` +
@@ -278,6 +295,8 @@ function main() {
       for (const t of r.waiting) console.log(`  [~] ${t.id}. ${t.text}${t.until ? `   ← until ${t.until}` : ''}`);
       for (const t of r.human) console.log(`  [@] ${t.id}. ${t.text}`);
       if (r.cycles.length) console.log(`\n☠️ circular after:  ${r.cycles.join('\n                    ')}`);
+      if (r.expired.length) console.log(`\n☠️ expired until:   ` +
+        r.expired.map((t) => `${t.id}. (${t.until})`).join(', '));
     }
     if (unknown.length) {
       console.log(`\n☠️ prerequisites not in the queue (treated as met — check for a typo): ${unknown.join(', ')}`);
