@@ -37,6 +37,10 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
+// ☠️ NEVER let bookkeeping break a turn: every gatelog call is wrapped.
+let gatelog = null;
+try { gatelog = require('./gatelog.cjs'); } catch { /* optional */ }
+const gl = (fn, ...a) => { try { return gatelog ? gatelog[fn](...a) : ''; } catch { return ''; } };
 
 const TODO = process.env.FP3_QUEUE_FILE ||
   '/mnt/1TB/pmos/fp3-pmaports/docs/TODO.md';
@@ -312,11 +316,15 @@ function main() {
     process.exit(0);
   }
   writeState(st);
+  // ☠️ ASK ABOUT THE LAST ONE BEFORE LOGGING THIS ONE, or the question is about
+  // the firing that is happening right now, which nobody can answer yet.
+  const ask = gl('askLine', 'queue');
+  gl('log', 'queue', `task ${r.ready[0].id}`);
   process.stdout.write(JSON.stringify({
     decision: 'block',
     systemMessage: `[sor] következő feladat: ${r.ready[0].id != null ? `${r.ready[0].id}. ` : ''}` +
       `${r.ready[0].text.slice(0, 60)}`,
-    reason:
+    reason: ask +
       `The next task in the queue (${TODO}):\n\n${describe(r.ready[0])}\n\n` +
       `Do this one. When it is finished mark it \`[x]\` there — or move it to ` +
       `TODO-DONE.md, which is what satisfies anything with \`after: ${r.ready[0].id}\`.\n` +

@@ -18,6 +18,10 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
+// ☠️ Bookkeeping must never fail a turn: every gatelog call is wrapped.
+let gatelog = null;
+try { gatelog = require('./gatelog.cjs'); } catch { /* optional */ }
+const gl = (fn, ...a) => { try { return gatelog ? gatelog[fn](...a) : ''; } catch { return ''; } };
 
 const STATE_DIR = path.join(process.env.HOME || '/home/fp3', '.claude', '.state');
 const STATE = path.join(STATE_DIR, 'fp3-measurements.json');
@@ -131,9 +135,11 @@ process.stdin.on('end', () => {
     if (pending.length) {
       for (const u of pending) state[u].blockedOnce = true; // block at most once per unit
       write(state);
+      const ask = gl('askLine', 'measurement-watch');
+      gl('log', 'measurement-watch', pending.join(','));
       process.stdout.write(JSON.stringify({
         decision: 'block',
-        reason:
+        reason: ask +
           `A measurement is still running unattended on the phone (${pending.map((u) => `\`${u}\``).join(', ')}) ` +
           `with no background watcher. Before ending the turn, start one with Bash ` +
           `run_in_background so its result arrives without the user having to ask, and tell them the ETA. ` +
