@@ -585,8 +585,16 @@ function findCycle(s, id, pre) {
 }
 const isActionable = (s, i) => (i.status === 'todo' || i.status === 'doing') && !blockers(s, i).all.length;
 const actionableItems = (s) => s.items.filter((i) => isActionable(s, i));
+// ☠️ THIS USED TO IGNORE `waiting`, AND THAT WAS THE WHOLE WALL OF TEXT.
+// Measured 2026-09-03: 9 of 18 waiting items already carried an `after` edge
+// (19, 30, 31, 41, 54, 55, 64, 85, 118) - the dependency graph was there and the
+// renderer threw it away, because this filter only admitted todo/doing. So every
+// one of them fell into the verbose WAITING section and printed two lines of
+// prose instead of collapsing to "waiting on: 116". The diagnosis that blamed
+// the data model ("parked in prose instead of `after`") was wrong: only 2 of 18
+// genuinely lack an edge. One status check, not a redesign.
 const blockedItems = (s) => s.items.filter((i) =>
-  (i.status === 'todo' || i.status === 'doing') && blockers(s, i).all.length);
+  (i.status === 'todo' || i.status === 'doing' || i.status === 'waiting') && blockers(s, i).all.length);
 
 // Effective priority = max(own stars, every dependent's effective priority),
 // transitively. Cycles are refused at write time; the `seen` set keeps a state
@@ -747,18 +755,87 @@ function renderHuman(s, tail) {
     } else {
       out.push('        THEY DO: ☠️ NOT WRITTEN DOWN — say it before they have to ask');
     }
-    if (i.humanMine) out.push(`        I DO MEANWHILE: ${i.humanMine}`);
-    if (i.humanNext) out.push(`        THEN: ${i.humanNext}`);
-    if (i.note) out.push(`        NOTE: ${i.note}`);
+    // ☠️ THE INSTRUCTION IS UNCLIPPED; ITS REASONING IS NOT. The rule above
+    // protects what the person has to DO - text, WHEN, THEY DO. It was applied to
+    // the whole item, so the working notes rode along at full length and buried
+    // the instruction in the middle of themselves: on 2026-09-03 item 112's NOTE
+    // was 588 characters of P-CSCF TLV analysis wedged between "what you do" and
+    // "what it decides", and the user's report was that the human items were the
+    // hard ones to find. Reasoning is looked up in the plan when wanted; it does
+    // not belong in a standing instruction.
+    if (i.humanMine) out.push(`        I DO MEANWHILE: ${clip(i.humanMine, 220)}`);
+    if (i.humanNext) out.push(`        THEN: ${clip(i.humanNext, 220)}`);
+    if (i.note) out.push(`        NOTE: ${clip(i.note, 180)}`);
   }
   return out;
+}
+
+// ☠️ THE REMINDER COULD NOT SAY WHETHER ANYTHING WAS HAPPENING. At 06:00 on
+// 2026-09-03 the user read a plan whose every item was waiting and could not tell
+// whether the run was working towards 19:00 or simply idle - "nem egyértelmű
+// addig történik-e valami vagy csak üresen áll". Nothing in the renderer knew
+// about time: it listed state, never a schedule. This line answers three
+// questions before the list: is anything to be done NOW, what is the next thing
+// that happens on its own, and how long until then.
+//
+// ☠️ AND AN EVENT NOBODY WROTE DOWN DOES NOT EXIST. The same morning, the run's
+// whole point - a measurement "starting at 19:00" - had no timer, no at-job and
+// no cron behind it anywhere, and neither the plan nor the hook noticed. Waits
+// and agreed human times are inferred here; anything else has to be declared
+// with `event`, which is the one piece of schedule this hook keeps.
+// ☠️ A `waitUntil` IS NOT AN EVENT, AND SORTING THEM TOGETHER HID THE ONE THAT
+// WAS. First version returned the earliest of everything, so NEXT read "10:24 —
+// item 75 comes back" while the thing the whole day was pointed at, a 19:00
+// measurement, sat behind it unmentioned. A `waitUntil` is a note to myself to
+// look again; a declared event is something that happens whether or not anybody
+// is watching, and a person who agreed a time is keeping it. Those two happen;
+// the reminder does not. Rank by that, and say the lesser one as an aside.
+function nextEvent(s) {
+  const happens = [], reminders = [];
+  const ev = s.event && s.event.at ? s.event : null;
+  if (ev && ev.at > Date.now()) happens.push({ at: ev.at, what: ev.what || 'declared event' });
+  for (const i of s.items) {
+    if (i.status === 'human' && i.humanAt > Date.now()) {
+      happens.push({ at: i.humanAt, what: `item ${i.id}, with a person` });
+    }
+    if (i.status === 'waiting' && i.waitUntil > Date.now()) {
+      reminders.push({ at: i.waitUntil, what: `item ${i.id} comes back` });
+    }
+  }
+  const by = (a, b) => a.at - b.at;
+  return { ev: happens.sort(by)[0] || null, note: reminders.sort(by)[0] || null };
+}
+const untilStr = (ms) => {
+  const m = ms / 6e4;
+  return m < 1 ? '<1 min' : m < 90 ? `${m.toFixed(0)} min` : `${(m / 60).toFixed(1)} h`;
+};
+function clockLine(s, open, blocked) {
+  const { ev: n, note } = nextEvent(s);
+  const at = (t) => `${new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` +
+    ` (in ${untilStr(t - Date.now())})`;
+  const when = (n
+    ? `${at(n.at)} — ${n.what}`
+    : '☠️ NOTHING HAPPENS ON ITS OWN. If the run is waiting for a moment, no clock is ' +
+      'keeping it: declare it (`event`) or arm it on the device.')
+    + (note && (!n || note.at < n.at) ? `\n      (sooner, but only a reminder: ${at(note.at)} ${note.what})` : '');
+  // ☠️ SAY "IDLE" IN THOSE WORDS when it is idle. A reader who has to infer it
+  // from an empty ACTIONABLE section infers it wrong, which is the report this
+  // line exists because of.
+  const now = open.length
+    ? `${open.length} to do right now`
+    : blocked.length || s.items.some((i) => i.status === 'waiting' || i.status === 'human')
+      ? 'IDLE — nothing to do in this session; everything open waits on something else'
+      : 'IDLE — nothing open at all';
+  return `NOW: ${now}\nNEXT: ${when}`;
 }
 
 function renderPlan(s) {
   if (!s.active) return 'No autonomous run is active.';
   const open = actionableItems(s);
   const blocked = blockedItems(s);
-  const waiting = s.items.filter((i) => i.status === 'waiting');
+  // Only items waiting on something OUTSIDE the plan; anything waiting on another
+  // item is rendered once, in BLOCKED, with the id it waits for.
+  const waiting = s.items.filter((i) => i.status === 'waiting' && !blockers(s, i).all.length);
   const em = effPrioMap(s);
   const done = s.items.filter((i) => i.status === 'done').length;
   const dropped = s.items.filter((i) => i.status === 'dropped').length;
@@ -768,6 +845,7 @@ function renderPlan(s) {
       `${blocked.length ? `${blocked.length} blocked · ` : ''}${waiting.length} waiting` +
       `${s.items.filter((i) => i.status === 'human').length ? ` · ${s.items.filter((i) => i.status === 'human').length} with a person` : ''}` +
       `   (every item, with notes: \`node "${__filename}" show\`)`,
+    clockLine(s, open, blocked),
   ];
   out.push(...renderHuman(s, false));
   if (open.length) {
@@ -823,7 +901,9 @@ function renderPlan(s) {
       out.push(`  … ${i.id}. ${clip(i.text, 100)}${age}\n        ⟵ ${clip(i.note, 100) || 'reason unstated'}`);
     }
   }
-  out.push(...renderHuman(s, true));
+  // ☠️ RENDERED ONCE. This used to print at the top AND the bottom, unclipped:
+  // the one thing another person has to act on was also the longest thing in
+  // the reminder, and it was there twice. It stays at the top, where it is read.
   return out.join('\n');
 }
 
@@ -837,9 +917,26 @@ function renderFacts(s, compact) {
   const m = s.facts.filter((f) => f.kind === 'measured');
   const r = s.facts.filter((f) => f.kind === 'retracted');
   const out = [];
+  // ☠️☠️ MEASURED 2026-09-03: THE FACT LIST WAS 71 % OF THE PER-TURN REMINDER
+  // (measured 51 %, retracted 20 %), against 24 % for everything to do with the
+  // work. The user's report was "too much is on it" and the diagnosis blamed the
+  // waiting items - which are 9 %. Nobody had measured the split, including me.
+  //
+  // ☠️ THE TWO HALVES ARE NOT THE SAME KIND OF THING, and that is why only one is
+  // cut. RETRACTED is a per-turn guard: its whole job is to stop the next turn
+  // rebuilding on a dead claim, and a retraction that is not in front of the
+  // reader does not do it - this run has rebuilt on a retracted claim before.
+  // MEASURED is a RECORD: it survives compaction, and it is already carried in
+  // full by SessionStart, by PreCompact and by STATUS.md. Re-emitting all of it
+  // on every single turn buys nothing the record does not already buy.
+  const RECENT = 8;
   if (m.length) {
-    out.push('MEASURED and standing:');
-    for (const f of m) {
+    const show = compact ? m.slice(-RECENT) : m;
+    out.push(compact && m.length > show.length
+      ? `MEASURED and standing — ${m.length} results; the ${show.length} most recent ` +
+        `(all of them: SessionStart, STATUS.md, or \`show\`):`
+      : 'MEASURED and standing:');
+    for (const f of show) {
       const flag = String(f.ev || '').startsWith('unverifiable:') ? ' ☠️ UNVERIFIED' : '';
       out.push(compact ? `  · ${clip(f.text, 200)}${flag}`
                        : `  · ${f.text}${flag}\n      witness: ${f.ev}`);
@@ -1189,6 +1286,27 @@ if (argv.length) {
       if (text) it.note = text;
       break;
     }
+    // ☠️ ONE FIELD, NOT A CALENDAR. This is deliberately a single next-external-
+    // event, not a schedule: the hook's job is to say whether the run is idle and
+    // until when, and a second list here would rebuild the thing this file is
+    // being cut down from.
+    case 'event': {
+      const body = rest.join(' ');
+      if (body.trim() === 'none') { s.event = null; break; }
+      const sep = rest.indexOf('--');
+      const when = (sep < 0 ? rest : rest.slice(0, sep)).join(' ').trim();
+      const what = sep < 0 ? '' : rest.slice(sep + 1).join(' ').trim();
+      if (!when) fail('usage: event <when> -- "<what happens then, and what arms it>"\n' +
+        '       event none    (nothing is scheduled any more)\n' +
+        '☠️ Only declare an event something ACTUALLY arms - a timer, a cron, a person who ' +
+        'agreed. A declared event with nothing behind it is worse than none: it reads as ' +
+        'a promise the run is keeping and it is keeping nothing.');
+      const at = parseWhen(when);
+      if (!at) fail(`could not read a time out of "${when}"`);
+      if (!what) fail('say WHAT happens and what arms it — a bare time tells a reader nothing.');
+      s.event = { at, what, setAt: Date.now() };
+      break;
+    }
     case 'drop': case 'note': case 'wait': {
       const id = Number(rest[0]);
       const it = s.items.find((i) => i.id === id);
@@ -1243,7 +1361,7 @@ if (argv.length) {
     case 'flush': case 'show':
       break;
     default:
-      console.error('usage: start|goal|add|note|wait|human|after|unafter|done|drop|measured|retracted|consulted|status|watch|flush|show|stop');
+      console.error('usage: start|goal|add|note|wait|human|event|after|unafter|done|drop|measured|retracted|consulted|status|watch|flush|show|stop');
       process.exit(2);
   }
   if (cmd !== 'show') {
