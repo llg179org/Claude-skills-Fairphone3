@@ -144,12 +144,30 @@ function magnitude(text) {
 // careful.
 const UNIVERSAL = /\b(always|never|persistent|permanent|survives?|every boot|invariably|mindig|soha|perzisztens|t[uú]l[eé]li|minden booton)\b/i;
 const SCOPED = /\b(scope:|measured on|n\s*=\s*\d|one boot|one leg|only .* was varied)/i;
+// ☠️ TUNED ON ITS OWN FIRST FIRING, WHICH WAS 4/4 FALSE. It flagged a heading
+// ("An enabled unit would have started on every boot"), an instruction in a
+// blockquote ("Never delete a disproven claim"), a queue `why:` key, and a
+// sentence about the gate log itself. None of them is a claim about the device,
+// and a lint whose first outing is entirely false is on its way to being
+// skimmed - which is how the gate that matters beside it gets skimmed too.
+//
+// Three cuts, each aimed at one of those four: headings and blockquotes are not
+// claims, queue keys are scheduling, and a claim about a MEASUREMENT carries a
+// quantity. The cost is real and stated: "the modem never subscribes to bit 12"
+// has no unit and would now be missed. This is a net, not a proof.
+const NOT_A_CLAIM = /^\s*(#|>|\||-\s*\[|(why|when|they-do|after|until|witness|scope):)/;
 function scope(lines) {
   const out = [];
   for (const l of lines) {
     const t = l.replace(/^[+\s]*/, '');
     if (t.length < 40) continue;                 // headings and list keys
-    if (UNIVERSAL.test(t) && !SCOPED.test(t)) {
+    if (NOT_A_CLAIM.test(t)) continue;
+    if (!/\d/.test(t)) continue;                 // a measured claim carries a quantity
+    // ☠️ CODE IS NOT PROSE. `Persistent=false` is a systemd directive and matched
+    // the universal-word pattern twice in one paragraph about a timer. Strip
+    // inline code spans before judging the sentence.
+    const prose = t.replace(/`[^`]*`/g, ' ');
+    if (UNIVERSAL.test(prose) && !SCOPED.test(prose)) {
       out.push(`"${t.slice(0, 100)}${t.length > 100 ? '…' : ''}"\n     ` +
         `— a universal word with no stated scope. What was actually varied?`);
     }
