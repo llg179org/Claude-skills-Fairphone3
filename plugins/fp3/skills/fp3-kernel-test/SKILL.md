@@ -454,6 +454,43 @@ A run whose numbers land inside bands written before it started is not merely
 measured. It is **predicted**, which is the strongest thing a single night can
 produce — and it costs nothing but the hour while the phone is already busy.
 
+### Step 0c — ☠️ Run what runs: a stand-in that passes proves nothing about the original
+
+The most expensive failure mode on this device is not a wrong hypothesis. It is a
+**reproduction that is not the thing**. Four instances in a single day, all the
+same shape — the substitute passed, the original was broken, and each "disproof"
+sent the search somewhere else:
+
+| the stand-in | why it passed | what actually ran |
+|---|---|---|
+| the awk program in a shell VARIABLE | variables are not expanded twice | the program inline in an unquoted here-doc, which the shell expands |
+| the HOST's `busybox awk` | this build has math compiled in | the phone's busybox, a different build |
+| `date -d "$t + 30 seconds"` | GNU date accepts it | busybox date rejects it, and the fallback silently made the test trivially true |
+| `journalctl --since <leg start>` | it did bound one end | the window also needed `--until <leg end>`, so post-leg events counted as in-leg |
+
+The rules that would have caught all four:
+
+1. **Extract the deployed artefact and run it unchanged.** Not a retyped copy, not
+   a simplified version: `sed -n '/<marker>/,/<marker>/p' /usr/local/bin/<script>`
+   and execute that. If the repro is easier to write than the original, it is a
+   different program.
+2. **Interpret with the target's interpreter.** The phone runs busybox `ash` and
+   busybox `awk`; the host runs dash/bash and gawk. `sh -n` AND `busybox ash -n`
+   on every device-side script, and prefer `busybox awk` for a quick check — but
+   ☠️ only after confirming the two builds agree on what you are relying on,
+   because they are packaged separately and differ.
+3. **A test that cannot fail has told you nothing.** When a check comes back
+   green, ask what its failing output would have looked like — and if a fallback
+   path (a `|| echo`, a `${x:-default}`, a rejected argument) could have produced
+   the same green, the check is not wired to the question.
+4. **Bound BOTH ends of every window.** An interval with one open end quietly
+   collects whatever happened afterwards.
+
+☠️ And the corollary for text embedded in scripts: an apostrophe inside a
+single-quoted `awk` program closes the program, and the shell then parses the awk
+body as its own — reported as a shell syntax error on a line that was never
+shell. Comments inside `awk '...'` blocks take no apostrophes.
+
 ### Step 0a — ☠️ Re-measure that the bug still reproduces, before you build the fix
 A parked item carries a diagnosis, and a diagnosis has a shelf life. The device
 has moved since it was written: a different kernel, a different userspace
