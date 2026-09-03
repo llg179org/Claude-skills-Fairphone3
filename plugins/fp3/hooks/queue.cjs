@@ -46,10 +46,24 @@ const TODO = process.env.FP3_QUEUE_FILE ||
   '/mnt/1TB/pmos/fp3-pmaports/docs/TODO.md';
 const BEGIN = '<!-- FP3-QUEUE:BEGIN -->';
 const END = '<!-- FP3-QUEUE:END -->';
-const STATE = path.join(
-  process.env.CLAUDE_STATE_DIR ||
-    path.join(process.env.HOME || '/home/fp3', '.claude', '.state'),
-  'fp3-queue.json');
+const STATE_DIR = process.env.CLAUDE_STATE_DIR ||
+  path.join(process.env.HOME || '/home/fp3', '.claude', '.state');
+const STATE = path.join(STATE_DIR, 'fp3-queue.json');
+
+// ☠️ CLAIMS EXIST BECAUSE TWO WINDOWS GOT THE SAME TASK. Measured 2026-09-03
+// with two simulated sessions against one queue: both were handed "1. Elso
+// feladat". Nothing in the design stopped that - the hook read the file, took
+// ready[0] and blocked, and read-only is not coordination.
+//
+// ☠️ AND THE CLAIM DELIBERATELY DOES NOT LIVE IN TODO.md. Writing the claim into
+// the document would make every dispatch a write to the one file both windows
+// share - i.e. it would CREATE the write collision it is meant to prevent, and
+// churn the git history with coordination noise. The queue (what to do) stays in
+// the document and stays human-owned; the claim (who is on it right now) is
+// runtime state and lives beside it.
+const CLAIMS = path.join(STATE_DIR, 'fp3-queue-claims.json');
+// A window that dies holding a claim must not park the task for ever.
+const CLAIM_TTL_MIN = 90;
 
 // ☠️ ANTI-SPIN IS THE ONE PIECE OF STATE, AND IT IS NOT NEGOTIABLE. A Stop hook
 // that blocks to hand out a task will hand out the SAME task for ever if the task
@@ -70,6 +84,50 @@ const writeState = (s) => {
     fs.renameSync(tmp, STATE);           // atomic: a torn state file loses the run
   } catch { /* a hook must never be the reason a turn fails */ }
 };
+
+// ☠️ AN EXCLUSIVE-CREATE LOCK, NOT A MUTEX. `wx` fails if the file exists, which
+// is the one atomic primitive available across processes here. It is held for the
+// microseconds of a read-modify-write and released in a finally, and a lock older
+// than a minute is broken on sight - a lock that can outlive its holder is worse
+// than no lock, because it stops the work silently.
+function withLock(fn) {
+  const lock = `${CLAIMS}.lock`;
+  for (let i = 0; i < 50; i++) {
+    try {
+      const fd = fs.openSync(lock, 'wx');
+      try { fs.writeSync(fd, String(process.pid)); fs.closeSync(fd); return fn(); }
+      finally { try { fs.unlinkSync(lock); } catch { /* already gone */ } }
+    } catch (e) {
+      if (e.code !== 'EEXIST') return fn();          // no lock is better than no work
+      try {
+        if (Date.now() - fs.statSync(lock).mtimeMs > 60000) fs.unlinkSync(lock);
+      } catch { /* raced with the holder */ }
+      // busy-wait briefly; this is contended for microseconds, not seconds
+      const until = Date.now() + 20;
+      while (Date.now() < until) { /* spin */ }
+    }
+  }
+  return fn();
+}
+
+const readClaims = () => {
+  try { return JSON.parse(fs.readFileSync(CLAIMS, 'utf8')); } catch { return {}; }
+};
+function writeClaims(c) {
+  try {
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    const tmp = `${CLAIMS}.${process.pid}`;
+    fs.writeFileSync(tmp, JSON.stringify(c, null, 1));
+    fs.renameSync(tmp, CLAIMS);
+  } catch { /* coordination must never fail a turn */ }
+}
+// Expired claims are dropped on every read, so a window that was closed mid-task
+// releases it by doing nothing.
+function liveClaims() {
+  const c = readClaims(), out = {}, cut = Date.now() - CLAIM_TTL_MIN * 60000;
+  for (const [id, v] of Object.entries(c)) if (v && v.at > cut) out[id] = v;
+  return out;
+}
 
 // --- parsing ---------------------------------------------------------------
 //
@@ -204,9 +262,10 @@ function expired(tasks) {
     parseUntil(t.until) && parseUntil(t.until) < Date.now());
 }
 
-function report(tasks) {
+function report(tasks, me) {
   const byId = new Map(tasks.filter((t) => t.id != null).map((t) => [t.id, t]));
-  const ready = [], blocked = [], waiting = [], human = [];
+  const claims = liveClaims();
+  const ready = [], blocked = [], waiting = [], human = [], held = [];
   for (const t of tasks) {
     if (t.mark === 'x') continue;
     if (t.mark === '@') { human.push(t); continue; }
@@ -214,9 +273,16 @@ function report(tasks) {
     t._b = b;
     if (b.open.length) blocked.push(t);
     else if (t.mark === '~') waiting.push(t);
-    else ready.push(t);
+    else {
+      const cl = t.id != null ? claims[String(t.id)] : null;
+      // Mine is still mine: a window re-reading its own claim must get its task
+      // back, or a second Stop in the same session would hand it something else.
+      if (cl && me && cl.session !== me) { held.push({ t, cl }); continue; }
+      ready.push(t);
+    }
   }
-  return { ready, blocked, waiting, human, byId, cycles: cycles(tasks), expired: expired(tasks) };
+  return { ready, blocked, waiting, human, held, byId,
+    cycles: cycles(tasks), expired: expired(tasks) };
 }
 
 function idleText(r, tasks) {
@@ -231,9 +297,20 @@ function idleText(r, tasks) {
       'not let it park:\n  ' + r.expired.map((t) =>
         `${t.id}. ${clip(t.text, 70)}  (until ${t.until})`).join('\n  '));
   }
-  lines.push(r.waiting.length || r.blocked.length || r.human.length
-    ? `IDLE — nothing can be started here: ${r.waiting.length} waiting on something outside ` +
-      `this session, ${r.blocked.length} blocked behind another task, ${r.human.length} with a person.`
+  // ☠️ "THE QUEUE IS EMPTY" WAS A LIE WHEN ANOTHER WINDOW HELD THE WORK. Caught on
+  // the claim feature's own TTL test: one task, claimed elsewhere, and this said
+  // the queue was empty - which reads as "there is nothing left to do" rather than
+  // "somebody else is doing it". The two call for opposite reactions.
+  const parts = [];
+  if (r.waiting.length) parts.push(`${r.waiting.length} waiting on something outside this session`);
+  if (r.blocked.length) parts.push(`${r.blocked.length} blocked behind another task`);
+  if (r.human.length) parts.push(`${r.human.length} with a person`);
+  if (r.held.length) {
+    parts.push(`${r.held.length} claimed by another window (` +
+      r.held.map(({ t, cl }) => `${t.id}→${cl.session}`).join(', ') + ')');
+  }
+  lines.push(parts.length
+    ? `IDLE — nothing can be started here: ${parts.join(', ')}.`
     : 'IDLE — the queue is empty.');
   lines.push(n
     ? `NEXT: ${new Date(n.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} ` +
@@ -271,6 +348,12 @@ function main() {
     try { ev = JSON.parse(raw || '{}'); } catch { ev = {}; }
   }
 
+  // ☠️ THE SESSION ID COMES FROM THE HOOK INPUT, and the hook was throwing it
+  // away: `session_id` is in every event and nothing read it. Without it there is
+  // no "who", and without a who there is no claim and no per-window state.
+  const me = String(ev.session_id || process.env.CLAUDE_SESSION_ID || '').slice(0, 12) ||
+    (cli ? 'cli' : '');
+
   let text;
   try { text = fs.readFileSync(TODO, 'utf8'); } catch (e) {
     if (cli) { console.error(`cannot read ${TODO}: ${e.message}`); process.exit(1); }
@@ -281,7 +364,40 @@ function main() {
     if (cli) { console.error(err); process.exit(1); }
     process.exit(0);
   }
-  const r = report(tasks);
+  const r = report(tasks, me);
+
+  // ☠️ MARKING A TASK DONE IS A READ-MODIFY-WRITE ON A SHARED FILE, so it happens
+  // under the lock and touches ONE line. The alternative - rewriting TODO.md whole
+  // from two windows - is last-writer-wins with silent loss, and that is how the
+  // queue itself would be corrupted by the very concurrency this release adds.
+  if (cli === 'done' || cli === 'release') {
+    const id = Number(process.argv[3]);
+    if (!id) { console.error(`usage: ${cli} <id>`); process.exit(1); }
+    const out = withLock(() => {
+      const cur = fs.readFileSync(TODO, 'utf8');
+      const re = new RegExp(`^(\\s*-\\s*\\[)[ x~@](\\]\\s*${id}\\.)`, 'm');
+      if (!re.test(cur)) return `no task ${id} in the queue`;
+      const next = cli === 'done' ? cur.replace(re, '$1x$2') : cur;
+      if (cli === 'done') {
+        const tmp = `${TODO}.${process.pid}`;
+        fs.writeFileSync(tmp, next); fs.renameSync(tmp, TODO);
+      }
+      const c = liveClaims(); delete c[String(id)]; writeClaims(c);
+      return cli === 'done' ? `${id} marked [x] and released` : `${id} released`;
+    });
+    console.log(out);
+    process.exit(0);
+  }
+  if (cli === 'claims') {
+    const c = liveClaims();
+    const e = Object.entries(c);
+    if (!e.length) { console.log('no live claims'); process.exit(0); }
+    for (const [id, v] of e.sort((a, b) => a[1].at - b[1].at)) {
+      console.log(`  ${id}. held by ${v.session} for ${((Date.now() - v.at) / 6e4).toFixed(0)} min` +
+        `  ${v.text || ''}`);
+    }
+    process.exit(0);
+  }
 
   if (cli === 'show' || cli === 'next' || cli === 'check') {
     const unknown = tasks.flatMap((t) => (t._b ? t._b.unknown : []).map((u) => `${t.id} → ${u}`));
@@ -295,6 +411,8 @@ function main() {
       for (const t of r.waiting) console.log(`  [~] ${t.id}. ${t.text}${t.until ? `   ← until ${t.until}` : ''}`);
       for (const t of r.human) console.log(`  [@] ${t.id}. ${t.text}`);
       if (r.cycles.length) console.log(`\n☠️ circular after:  ${r.cycles.join('\n                    ')}`);
+      for (const { t, cl } of r.held) console.log(`  [»] ${t.id}. ${clip(t.text, 60)}` +
+        `   ← claimed by ${cl.session}, ${((Date.now() - cl.at) / 6e4).toFixed(0)} min ago`);
       if (r.expired.length) console.log(`\n☠️ expired until:   ` +
         r.expired.map((t) => `${t.id}. (${t.until})`).join(', '));
     }
@@ -327,9 +445,12 @@ function main() {
 
   if (ev.hook_event_name !== 'Stop') process.exit(0);
 
-  const st = readState();
-  // The signature is the queue itself: a queue that has not changed cannot have
-  // produced new work, so nudging again about it is noise.
+  // ☠️ THE NUDGE STATE IS PER WINDOW. It used to be one flat object in one file,
+  // so window B's `said` suppressed window A's idle notice and their nudge counts
+  // interleaved - two sessions sharing an anti-spin budget means neither gets the
+  // three tries it was designed to have.
+  const all = readState();
+  const st = all[me] || (all[me] = {});
   const sig = JSON.stringify(tasks.map((t) => `${t.mark}${t.id}${t.text}`));
   if (st.sig !== sig) { st.sig = sig; st.nudges = 0; }
 
@@ -337,8 +458,8 @@ function main() {
     // ☠️ NOT A BLOCK. The whole complaint that produced this file was a hook that
     // held the session at a standstill with nothing to do. Idle is reported once
     // per distinct queue and then it is quiet.
-    if (st.said === sig) { writeState(st); process.exit(0); }
-    st.said = sig; writeState(st);
+    if (st.said === sig) { writeState(all); process.exit(0); }
+    st.said = sig; writeState(all);
     process.stdout.write(JSON.stringify({
       hookSpecificOutput: { hookEventName: 'Stop', additionalContext: idleText(r, tasks) },
     }));
@@ -347,7 +468,7 @@ function main() {
 
   st.nudges = (st.nudges || 0) + 1;
   if (st.nudges > MAX_NUDGE) {
-    writeState(st);
+    writeState(all);
     process.stdout.write(JSON.stringify({
       hookSpecificOutput: {
         hookEventName: 'Stop',
@@ -360,7 +481,19 @@ function main() {
     }));
     process.exit(0);
   }
-  writeState(st);
+  // ☠️ CLAIM IT UNDER THE LOCK, AND RE-READ INSIDE THE LOCK. Two windows can pass
+  // the `ready` test at the same instant; only the one that writes first may keep
+  // the task. The loser falls through to the next ready task on its next Stop.
+  const got = withLock(() => {
+    const c = liveClaims();
+    const key = String(r.ready[0].id);
+    if (c[key] && c[key].session !== me) return false;
+    c[key] = { session: me, at: Date.now(), text: clip(r.ready[0].text, 60) };
+    writeClaims(c);
+    return true;
+  });
+  if (!got) { writeState(all); process.exit(0); }   // somebody else took it; try again next turn
+  writeState(all);
   // ☠️ ASK ABOUT THE LAST ONE BEFORE LOGGING THIS ONE, or the question is about
   // the firing that is happening right now, which nobody can answer yet.
   const ask = gl('askLine', 'queue');

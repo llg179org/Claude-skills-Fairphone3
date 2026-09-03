@@ -232,14 +232,19 @@ function main() {
   }
   if (ev.hook_event_name !== 'Stop') process.exit(0);
 
-  const st = readState();
+  // ☠️ PER WINDOW, for the same reason as the queue's: one flat state object meant
+  // two sessions shared one anti-spin budget, so neither got the tries it was
+  // designed to have and one window's silence suppressed the other's warning.
+  const me = String(ev.session_id || process.env.CLAUDE_SESSION_ID || 'unknown').slice(0, 12);
+  const all = readState();
+  const st = all[me] || (all[me] = {});
   const sig = JSON.stringify([un, lints]);
   if (st.sig !== sig) { st.sig = sig; st.nudges = 0; }
-  if (!un.length && !lints.length) { st.nudges = 0; writeState(st); process.exit(0); }
+  if (!un.length && !lints.length) { st.nudges = 0; writeState(all); process.exit(0); }
 
   st.nudges = (st.nudges || 0) + 1;
-  if (st.nudges > MAX_NUDGE) { writeState(st); process.exit(0); }
-  writeState(st);
+  if (st.nudges > MAX_NUDGE) { writeState(all); process.exit(0); }
+  writeState(all);
 
   const ask = gl('askLine', 'results-guard');
   gl('log', 'results-guard', `${un.length} unrecorded, ${lints.length} lint`);
