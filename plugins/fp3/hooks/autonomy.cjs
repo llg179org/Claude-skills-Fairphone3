@@ -1435,6 +1435,7 @@ process.stdin.on('end', () => {
       s.blocks += 1; logGate(s, 'unrecorded-result'); write(s); flushStatus(s);
       process.stdout.write(JSON.stringify({
         decision: 'block',
+        systemMessage: `[hajcsár] ${stale.length} rögzítetlen eredmény - a kapu visszaküldött leírni`,
         reason:
           `Results have landed that the run state does not record:\n  - ${stale.join('\n  - ')}\n\n` +
           `Write them down before the turn ends — an auto-compaction here loses them.\n` +
@@ -1461,6 +1462,7 @@ process.stdin.on('end', () => {
         // state that has moved - the dated trap in this repo's own notes.
         process.stdout.write(JSON.stringify({
           decision: 'block',
+          systemMessage: `[hajcsár] a kikért bírálat ${due.slice(8)} perce kint van rögzítetlenül`,
           reason:
             `A review has been out for ${due.slice(8)} minutes with ${(s.consult || {}).agent} ` +
             `and has not been recorded.\n\n` +
@@ -1474,6 +1476,7 @@ process.stdin.on('end', () => {
       }
       process.stdout.write(JSON.stringify({
         decision: 'block',
+        systemMessage: `[hajcsár] külső bírálat esedékes (${due}) - kérek egyet a friss adatokkal`,
         reason:
           `An outside review is due — ${due}.\n\n` +
           `Ask for one now, and put the CURRENT data in the prompt. ☠️ A review written against ` +
@@ -1560,18 +1563,38 @@ process.stdin.on('end', () => {
     }
     if (s.blocks >= MAX_BLOCKS) {
       write(s); flushStatus(s);
-      emit('Stop',
-        `☠️ The autonomous plan has not changed across ${MAX_BLOCKS} turns while ` +
-        `${open.length} item(s) are still open. Not blocking again — that would spin. ` +
-        `Tell the user plainly what is blocking item ${nextItem(s, open).id} ` +
-        `("${clip(nextItem(s, open).text, 120)}") ` +
-        `and what you need from them.`);
+      // ☠️ ONE JSON OBJECT PER HOOK RUN. Two writes is not two messages, it is a
+      // malformed stream - caught before it shipped, by reading the write rather
+      // than the intent.
+      process.stdout.write(JSON.stringify({
+        systemMessage: `[hajcsár] ☠️ ${MAX_BLOCKS} kör óta nem mozdult a terv, ` +
+          `${open.length} tétel nyitva - a kapu nem blokkol tovább, hogy ne pörögjön.`,
+        hookSpecificOutput: {
+          hookEventName: 'Stop',
+          additionalContext:
+            `☠️ The autonomous plan has not changed across ${MAX_BLOCKS} turns while ` +
+            `${open.length} item(s) are still open. Not blocking again — that would spin. ` +
+            `Tell the user plainly what is blocking item ${nextItem(s, open).id} ` +
+            `("${clip(nextItem(s, open).text, 120)}") ` +
+            `and what you need from them.`,
+        },
+      }));
       process.exit(0);
     }
     const nx = nextItem(s, open);
     s.blocks += 1; logGate(s, 'open-work'); write(s); flushStatus(s);
     process.stdout.write(JSON.stringify({
       decision: 'block',
+      // ☠️ `reason` GOES TO THE MODEL, `systemMessage` GOES TO THE PERSON. This
+      // hook had only `reason` for its whole life, so every gate it fired was
+      // invisible to the user - who asked three times in one session why nothing
+      // seemed to be running, while the driver was in fact firing on every turn.
+      // A gate nobody can see is indistinguishable from a stall, and the person
+      // watching cannot tell "waiting on a 30-minute measurement" from "stuck".
+      // ☠️ ONE LINE, not the plan: the full listing is for the model, and pasting
+      // it here would bury the terminal in the same text every turn.
+      systemMessage:
+        `[hajcsár] ${open.length} nyitott · következő: #${nx.id} ${clip(nx.text.replace(/^★+\s*/, ''), 70)}`,
       reason:
         `Autonomous run is active and the plan still has open work. Do not stop to ask — ` +
         `continue with the next item now.\n\n${renderPlan(s)}\n\n` +
