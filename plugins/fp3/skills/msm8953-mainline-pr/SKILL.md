@@ -7,8 +7,13 @@ description: >-
   open destination: msm8953-mainline does not merge AI-assisted work and
   postmarketOS bans it outright. Encodes the maintainer guidance received on the
   msm8953-mainline channel: one branch per subsystem (not sub-split), few
-  well-formed commits, and never mix DTS with driver code. Use whenever
-  preparing a patch series from the llg179org/linux fork.
+  well-formed commits, and never mix DTS with driver code. Also carries the
+  tracking method: the upstreaming/<series> branch namespace, b4 as the series
+  tool, and the one status page (fp3-pmaports/docs/upstreaming/STATUS.md) that
+  records every series, review round, test run and foreign dependency. Use
+  whenever preparing, sending, or following up a patch series from the
+  llg179org/linux fork, or when asked where a submission stands — and run its
+  gate first on any fresh machine.
 ---
 
 # FP3 kernel work → upstream submission
@@ -25,7 +30,9 @@ on the personal fork (`github.com/llg179org/linux`) and shape it into something 
 maintainer will accept. The audio/WCD9335 series is the running worked example.
 
 The fork's layout — `wip/<base>/<category>` → `integration/<base>` →
-`submit/<base>/<category>`, and the rule that a change must land on both its wip
+`upstreaming/<series>` (the send-shaped branch; the older `submit/<base>/<category>`
+naming is retired, see [Tracking the submissions](#tracking-the-submissions--the-upstreaming-namespace-and-the-one-status-page)),
+and the rule that a change must land on both its wip
 branch and integration — is **not repeated here**. It is defined in
 [`fp3-pmaports/README.md`](https://github.com/llg179org/fp3-pmaports#the-branch-model),
 with the full base-bump procedure in
@@ -234,8 +241,10 @@ instinct to over-split**:
 Separate branches for **camera, charger, audio, modem** are fine and expected.
 Splitting *audio* into several submission branches
 (`wcd9335-txfe`, `wcd9335-mbhc`, `wcd9335-dmic`, …) is "too complicated and not
-useful" — do **not** do it. One `submit/audio` branch carries the whole audio
-story.
+useful" — do **not** do it. One series carries the whole audio story for one
+tree — several `upstreaming/*` series exist only when the *trees* differ (the
+codec work to ASoC, the board DTS to the SoC tree, an I²C fix to i2c), never to
+sub-split within a tree.
 
 ### 2. Reduce the number of commits per task
 
@@ -636,6 +645,241 @@ steps; it must never absorb charger/camera/modem DTS.
 
 ---
 
+## Tracking the submissions — the `upstreaming/` namespace and the one status page
+
+Everything below this heading is *method*; the current answer to every command in
+it lives in
+[`fp3-pmaports/docs/upstreaming/STATUS.md`](https://github.com/llg179org/fp3-pmaports/blob/main/docs/upstreaming/STATUS.md).
+A submission is a months-long, many-round mail exchange per series, several
+series in flight at once, foreign series they wait on, and a device test behind
+every version — that is too much state to keep in prose, in a chat, or in
+memory. This section says where it is kept and what shape it has, so that a
+session on any machine can pick the work up from the page alone.
+
+### ☠️ The gate: run this when the skill loads, before any series work
+
+A fresh checkout or a fresh machine has none of the scaffolding. Check, do not
+assume, and treat anything missing as the *first* task — a series prepared
+without the page is a series whose review rounds will be lost.
+
+```sh
+# 1. the tracking page exists and has the fixed header (see the template below)
+test -f docs/upstreaming/STATUS.md && grep -q '^| series | category | tree |' docs/upstreaming/STATUS.md \
+  || echo "MISSING: docs/upstreaming/STATUS.md — create it from the template"
+
+# 2. b4 is installed (the series tool; git send-email alone loses the trailers/versions bookkeeping)
+b4 --version >/dev/null 2>&1 || echo "MISSING: b4 — pipx install b4   (or apk add b4)"
+
+# 3. the review-tracking plugin for foreign series we depend on
+ls ~/.claude/plugins 2>/dev/null | grep -qi kernel-review || echo "MISSING: jlelli/claude-kernel-reviews plugin (/plugin marketplace add jlelli/claude-kernel-reviews)"
+
+# 4. the series branches use the upstreaming/ namespace, not submit/
+git -C <fork> for-each-ref --format='%(refname:short)' 'refs/heads/upstreaming/*' 'refs/remotes/fork/upstreaming/*' | head
+git -C <fork> for-each-ref --format='%(refname:short)' 'refs/heads/submit/*' | grep -q . \
+  && echo "LEGACY: submit/* branches still present — tag them archive/submit-<base>-<cat>-final and stop using them"
+
+# 5. the merge window is not open (never answer this from the tag list)
+curl -s https://www.kernel.org/releases.json | python3 -c \
+  'import json,sys; r=[x for x in json.load(sys.stdin)["releases"] if x["moniker"]=="mainline"][0]; print(r["version"], r["released"]["isodate"])'
+```
+
+Item 5: a version containing `-rc` means the rc phase is running and sending is
+allowed; a bare `vX.Y` means the merge window has just opened — wait. ☠️
+`git ls-remote --tags … | sort -V | tail` looks like the same check and is wrong
+in the direction that always reads "safe": version sort puts `v7.2` *before*
+`v7.2-rc1`, so the last line is an `-rc` tag whether the release is out or not.
+
+### The branch namespace: `upstreaming/<series>` replaces `submit/<base>/<cat>`
+
+The `submit/<base>/<category>` layout mirrored *our* bring-up categories. Upstream
+does not split that way: it splits by **subsystem and maintainer tree**, and one
+of our categories can feed several trees (a codec binding to ASoC, a board `.dts`
+to the qcom SoC tree, an I²C fix to the i2c tree). So the unit of submission is
+the **upstream-shaped series**, and the branch is named after it, not after us:
+
+```
+upstreaming/<series>          the branch being prepared — a b4 prep branch
+upstreaming/<series>/v<N>     a tag on the exact commits of round N, made at send time
+```
+
+Rules that follow:
+
+- **`<series>` is a short, tree-flavoured slug** (`<driver>-<topic>`, `<board>-dts`),
+  chosen by asking `get_maintainer.pl` which tree it goes to. If two candidate
+  series answer with the same tree and maintainer, they are probably one series.
+- **The board DTS is always its own series, sent last**, and its dependency list
+  names every driver/binding series it needs — the DTS cannot be applied until
+  those have landed (`maintainer-soc.rst`), and a DTS that fails `dtbs_check`
+  because its binding is not yet in the tree gets reverted.
+- **`wip/<base>/<cat>` stays the source of the work; `upstreaming/` is the only
+  thing that holds send-shaped commits.** The old `submit/<base>/<cat>` branches
+  are retired: tag each `archive/submit-<base>-<cat>-final` (they are the only
+  ref for their commits — see "Regenerating a submit branch orphans its old
+  commits") and delete the branch.
+- **The distillation rule changes shape but not meaning.** With one series per
+  category, `git diff wip/… submit/…` had to be empty. With upstream-shaped
+  series, the check is that the *union* of every `upstreaming/*` series drawn from
+  a category reproduces the category's content, measured as a line set, plus a
+  named list of what was deliberately left out (a hack you will not defend, a
+  file that does not exist upstream). Keep that list on the STATUS page, not in a
+  commit message.
+  ```sh
+  # the lines a category carries that no series carries (and vice versa)
+  git diff <base>/main wip/<base>/<cat> -- <paths> | grep '^[-+]' | sort > /tmp/wip.l
+  for s in <series…>; do git diff <base-of-s> upstreaming/$s -- <paths>; done | grep '^[-+]' | sort > /tmp/up.l
+  comm -3 /tmp/wip.l /tmp/up.l
+  ```
+- **Every sent round is a tag, never a branch rewrite without one.** `b4 send`
+  rewrites nothing, but you will rebase the prep branch for v(N+1); the tag is what
+  keeps `lore` links and the STATUS page's "what exactly was sent" answerable.
+
+### `b4` is the mechanism, not an optional convenience
+
+`git format-patch` + `git send-email` produce a correct v1 and lose everything
+after it: which trailers arrived, what changed between versions, what the base
+was. `b4 prep` keeps that state on the branch itself (in an empty cover commit),
+so the commands are the bookkeeping:
+
+```sh
+b4 prep -n <series> -f <base-commit-or-tag>     # start: creates upstreaming/<series> (name it so; b4's default prefix is b4/)
+b4 prep --edit-cover                            # cover letter; the changelog goes under the --- line
+b4 prep --auto-to-cc                            # get_maintainer + recent committers of the touched files
+b4 prep --check                                 # checkpatch etc. on every patch
+b4 prep --edit-deps / --check-deps              # a foreign posted prerequisite (see "A dependency that was posted…")
+b4 send --reflect                               # dry run to yourself; git am it back before the list sees it
+b4 send                                         # the real send; note the message-id it prints
+git tag upstreaming/<series>/v$(b4 prep --show-revision)
+b4 trailers -u                                  # after review: pull Reviewed-by/Tested-by/Acked-by from lore, never from memory
+b4 prep --manual-reroll                         # bump to v(N+1) after the changes are made; the cover keeps the per-version changelog
+```
+
+☠️ Two b4 defaults to override: it names the branch `b4/<series>` (rename to
+`upstreaming/<series>` so the namespace rule above holds), and `--auto-to-cc`
+will happily add `stable@vger.kernel.org` if a `Cc: stable` trailer exists —
+that trailer is a decision (a user-visible bugfix), not a default.
+
+### `docs/upstreaming/STATUS.md` — the page, and what a session may write to it
+
+One file, English, no prose beyond a field's value. A header table with one row
+per series, then one section per series in a fixed shape, then the dependency
+list. The analysis of *why* something is blocked stays in
+`docs/upstreaming/README.md` and the `leads/`; the page only links to it.
+
+**Header table** (one screen, the thing you open first):
+
+```
+| series | category | tree | patches | state | last round | ball with | next from us | updated |
+```
+
+**Per-series section** — exactly these blocks, in this order:
+
+```
+## <series>
+
+Category:    <audio|voice|camera|charger|sensor|power>      ← our bring-up area, so the wip source is findable
+Tree:        <subsystem>, <maintainer branch> — <maintainers>; CC <lists>
+Source:      upstreaming/<series>   sent rounds: upstreaming/<series>/v1, /v2 …   (ONLY the send-shaped branch; wip is implied by Category)
+Depends:     D-<n>, D-<m> | –                                   ← entries in the dependency list at the end of the page
+
+Test:
+  branch:    <the branch the functional run booted, e.g. debug-int/<base> with the series rebased in> @ <sha>
+  device:    <which FP3, which slot>
+  battery:   fp3-selftest <date>, <ok>/<failed> → <link to the capture directory>
+  checkers:  checkpatch · W=1 · sparse · dt_binding_check · dtbs_check · allmodconfig · linux-next@<tag>   (✓ / ✗ / – with the date)
+
+Rounds:
+  | v | date | lore | reply (who, when) | asked for | handled |
+  | 1 | …    | https://lore.kernel.org/r/<msgid> | … | a, b, c | a ✓ · b ✓ · c disputed (link) |
+
+To do:
+  - [ ] …
+Done:
+  - <date>  …
+```
+
+**Dependency list** (end of page): `D-<n>` — what it is, author and date,
+patchwork/lore link, its state, and *what it needs from us* (a Tested-by, a
+comment on the thread, our own patch posted into it). Series refer to these by
+number in `Depends:`.
+
+**State vocabulary**, and the evidence that lets a series move:
+
+| state | may be written only with |
+|---|---|
+| `preparing` | the branch exists |
+| `rebased` | a trial rebase onto the destination tree, and its `base-commit:` |
+| `tested` | the Test block filled: a booted branch, a battery result, the checker line — all with links |
+| `sent v<N>` | the lore link of **our own** mail, and the `upstreaming/<series>/v<N>` tag |
+| `review` | at least one reply row in Rounds |
+| `applied` | the lore link of the maintainer's "Applied…" mail |
+| `-next` | the commit's sha in the maintainer's `-next` branch |
+| `mainline v<X.Y>` | the release tag that contains it |
+| exits: `rejected`, `unsendable`, `merged-into <series>` | a link to the reply, or the reason on the README |
+
+Four rules that keep the page true:
+
+1. **No state change without its evidence link.** The table above is the whole
+   rule; a state written from memory is the fabrication risk
+   [Factual integrity](#factual-integrity--overrides-everything-below) describes,
+   in a different column.
+2. **Every row is dated with the date of the evidence, not of the edit**, and the
+   header's `updated` is the newest such date.
+3. **The merge-window state is never written into the page** — it changes weekly;
+   the `releases.json` command in the gate is run before every send instead.
+4. **The Rounds table decides whether v(N+1) may go out**: every "asked for" item
+   of the last row is either handled or disputed with a lore link. A version sent
+   with an open item is a version the reviewer will send back.
+
+### Tracking the foreign series with the review plugin
+
+The dependency list's `D-` entries are somebody else's threads. Track them with
+`jlelli/claude-kernel-reviews` rather than by re-reading lore:
+
+```sh
+mkdir -p .claude/tracked-series          # in the kernel checkout
+/track <message-id-of-the-cover>         # once per D- entry
+/status                                  # the plugin's view; copy state changes into STATUS.md with the lore link
+/update <series-name>                    # when a new version of the foreign series appears
+```
+
+The plugin is a *reviewer's* tool and knows nothing about our own submissions —
+our side is the STATUS page, theirs is `/status`. Do not try to make one do the
+other's job.
+
+### The list-cycle traps that are not elsewhere in this skill
+
+Each of these is a way a correct series loses a round. They map onto STATUS
+columns so the page catches them before the list does.
+
+- **One version per review round, never one per comment.** Collect every reply,
+  wait at least a day after the last one, then send v(N+1). Mark Brown's
+  standing rule for ASoC: further changes after a patch is applied go as
+  *incremental* patches against the tree, not as a replacement.
+- **`RESEND` means byte-identical.** It is for a version the list never saw
+  (bounced, wrong address, ignored for weeks), not for a modified one — a
+  modified one is v(N+1) with a changelog.
+- **The changelog goes under the `---` line** of the cover letter or of each
+  patch, and says what changed *per version*; it is not part of the commit
+  message. `b4 prep --edit-cover` keeps it there.
+- **Carrying tags forward is the sender's job.** A `Reviewed-by:` given on v1
+  travels to v2 (if the patch did not change materially); one that was *not*
+  given never appears — `b4 trailers -u` and nothing else decides which is which.
+- **No content-free pings; resend instead, after two weeks or more.** A ping
+  cannot be reviewed; a resend can. Longer during a merge window.
+- **The 0-day robot (`kernel test robot`, `lkp@intel.com`) is a reviewer.** It
+  builds the series on other architectures and configs and replies on the thread;
+  a report is a Rounds row like any other, and the fix goes into v(N+1) with the
+  `Reported-by:` it asks for. Pre-empt it: `allmodconfig`, `W=1`, and a build on
+  the latest `linux-next` tag belong on the Test checker line.
+- **A DTS series is sent last and names what it waits for.** Its `Depends:` is
+  every driver/binding series it needs; sending it earlier costs a revert.
+- **Tags naming a person need that person's permission**, except `Cc:`,
+  `Reported-by:` and `Suggested-by:`; and `Assisted-by:` is written as
+  `Assisted-by: Claude:<model-id> [tool] [tool]`, listing only the analysis tools
+  actually run (sparse, coccinelle, smatch — not git, gcc or make).
+
+---
+
 ## Reshaping a wip branch into a series
 
 The audio branch is the standing example, and the *shape* of the reshape is the
@@ -687,7 +931,7 @@ committing, drop the wrong-domain files from the index, commit the rest, and
 gather all the DTS hunks into the final DTS commit:
 
 ```sh
-git checkout -b submit/audio <base>            # sound/for-next for ASoC drivers
+git checkout -b upstreaming/<series> <base>    # sound/for-next for ASoC drivers; or let `b4 prep -n` create it
 
 git cherry-pick -n <mixed-sha>                 # stage everything, don't commit
 git restore --staged arch/arm64/boot/dts/qcom/sdm632-fairphone-fp3.dts
@@ -705,7 +949,7 @@ needs splitting.
 ## Rebasing the fork's work onto a newer base (worked, 7.0.9 → 7.1.3)
 
 The concrete moves for porting a `wip/<old>/<category>` branch onto the current
-integration base (e.g. `7.1.3/main`) and reshaping it into `submit/<new>/<category>`.
+integration base (e.g. `7.1.3/main`) and reshaping it into `upstreaming/<series>`.
 The surrounding bookkeeping — which branches to create, delete and push, in what
 order — is in
 [`docs/rolling-a-new-base.md`](https://github.com/llg179org/fp3-pmaports/blob/main/docs/rolling-a-new-base.md);
@@ -715,7 +959,7 @@ what follows is only the git surgery:
   contain a slash (`7.1.3/main`), so `git fetch origin '7.1.3/main'` leaves it in
   `FETCH_HEAD` — there is usually **no `origin/7.1.3/main` ref**. Resolve the SHA
   once (`git rev-parse FETCH_HEAD`) and branch from that. **Gotcha that bites:**
-  `git checkout -b submit/x origin/7.1.3/main` *fails* ("not a commit"), and if you
+  `git checkout -b upstreaming/x origin/7.1.3/main` *fails* ("not a commit"), and if you
   chained `cherry-pick`/`commit` after it in one script they run **on whatever
   branch you were already on** — you silently commit onto the wrong branch. Check
   `git branch --show-current` after a failed checkout.
@@ -1064,7 +1308,7 @@ handled (ELC 2013):
   else has agreed to is not a dependency, it is a hope.
 - ☠️ **A branch other people pull is frozen. "Never, ever rebased."** The moment a
   second tree pulls your branch, rebasing it corrupts both. This is the opposite
-  of how our own `submit/*` branches work (regenerated from `wip`), so it is a
+  of how our own `upstreaming/*` branches work (regenerated from `wip`), so it is a
   habit that has to be switched off deliberately.
 - **The easy case has an easier form still**: for a *new* driver, either the
   driver maintainer takes the driver patch, **or** he gives an `Acked-by` and
@@ -1220,7 +1464,7 @@ exists precisely to fill that gap: attribution without an authorship claim.
   **English only**. That is the local convention (CLAUDE.md), unaffected.
 - **Upstream submission (LKML):** swap `Co-authored-by:` → `Assisted-by:` naming
   the model actually used, and never let the AI carry a `Signed-off-by`. When
-  rewriting the commits for the `submit/*` branch, do this swap as part of the same
+  rewriting the commits for the `upstreaming/*` branch, do this swap as part of the same
   pass that splits the DTS out.
 
 ### Credit the work you build on, especially when it is not upstream yet
@@ -1548,23 +1792,29 @@ silently. Grep your own tree for the ones you inherited, too — the MSM8953
 machine-driver support we build on contains a block whose own comment says
 `/* HACK … */`, and it has been rebased for two years.
 
-### `submit` must stay a distillation of `wip`
+### `upstreaming` must stay a distillation of `wip`
 
-The rule says `submit/<base>/<cat>` is regenerated from `wip`, never hand-edited,
+The rule says the send-shaped branch is regenerated from `wip`, never hand-edited,
 and the way it breaks is benign-looking: you run `checkpatch --strict` on the
-submit branch, fix the alignment complaints there, and never carry them back. Now
+series branch, fix the alignment complaints there, and never carry them back. Now
 regenerating — the documented way to produce the branch — would silently drop
 them, and the branch you tested is not the branch you would send.
 
+When a category maps onto exactly one series the check is a plain diff; when it
+feeds several trees, it is the line-set union described under
+[the branch namespace](#the-branch-namespace-upstreamingseries-replaces-submitbasecat):
+
 ```sh
-git diff wip/<base>/<cat> submit/<base>/<cat>    # must be empty
+git diff wip/<base>/<cat> upstreaming/<series>    # must be empty (one-series category)
+comm -3 /tmp/wip.l /tmp/up.l                      # must list only the deliberate leave-outs named on STATUS.md
 ```
 
-Two of five branches failed this on 2026-07-30. Run it after every submit
+Two of five branches failed this on 2026-07-30. Run it after every
 regeneration, and put style fixes on `wip` first, then cherry-pick.
 
-☠️ **Regenerating a submit branch orphans its old commits, and every link to them
-dies.** Documentation that cites a submit-branch hash silently rots: the object
+☠️ **Regenerating a series branch orphans its old commits, and every link to them
+dies.** (This is what the `upstreaming/<series>/v<N>` tags exist for: a sent round
+stays reachable however often the prep branch is rebuilt.) Documentation that cites a submit-branch hash silently rots: the object
 stays in a local clone long after GitHub has pruned it, so the link 404s while
 `git cat-file -e` still succeeds. Test reachability, not resolvability:
 
@@ -1642,7 +1892,7 @@ GitHub-flow conveniences any more.
   these files (`git log -- <file>`), whoever reported the bug, and
   `stable@vger.kernel.org` for a user-visible fix.
   ```sh
-  git format-patch -o /tmp/pset <base>..submit/audio
+  git format-patch -o /tmp/pset <base>..upstreaming/<series>   # or simply: b4 prep --auto-to-cc
   scripts/get_maintainer.pl /tmp/pset/0001-*.patch
   ```
 - **The mail form, all of it in one place.** `git send-email`, inline plain text,
@@ -2093,6 +2343,23 @@ work — so a self-review that stops at "sparse is clean" is half done.
 
 Grouped, and each line is the *whole* rule — the sections above carry the why.
 
+**Tracking (the gate ran, and the page will record this send)**
+
+- [ ] The gate in [Tracking the submissions](#tracking-the-submissions--the-upstreaming-namespace-and-the-one-status-page)
+      ran on this machine: `docs/upstreaming/STATUS.md` exists with the fixed
+      header, `b4` is installed, the review plugin tracks every `D-` dependency,
+      no `submit/*` branch is still in use, and `releases.json` says `-rc`.
+- [ ] The series has its section on STATUS.md with Category, Tree, Source,
+      Depends, a filled **Test** block (booted branch @ sha, device, battery
+      result with capture link, checker line), and its `state` is `tested`.
+- [ ] The branch is `upstreaming/<series>` as a `b4 prep` branch; the send will be
+      `b4 send`, followed by the `upstreaming/<series>/v<N>` tag and a Rounds row
+      carrying the lore link of our own mail.
+- [ ] If this is v(N+1): every "asked for" item of the previous Rounds row is
+      handled or disputed with a link, the per-version changelog sits under `---`,
+      given tags were pulled with `b4 trailers -u`, and at least a day has passed
+      since the last reply.
+
 **Destination and base**
 
 - [ ] Destination is **LKML** — msm8953-mainline will not merge AI-assisted work,
@@ -2115,8 +2382,9 @@ Grouped, and each line is the *whole* rule — the sections above carry the why.
       per logical step with no style/cleanup riding along.
 - [ ] **The import is its own commit**, byte-identical and attributed, with your
       changes in the next one and any style cleanup in a third.
-- [ ] **`git diff wip/<base>/<cat> submit/<base>/<cat>` is empty** — no fix applied
-      on the submit side only.
+- [ ] **`git diff wip/<base>/<cat> upstreaming/<series>` is empty** (or, for a
+      category feeding several trees, the line-set union check lists only the
+      leave-outs named on STATUS.md) — no fix applied on the series side only.
 - [ ] **Interdependent changes are in one series**, not two submissions citing each
       other (`Depends-on:` is not a kernel tag). A *foreign* posted prerequisite is
       declared with `b4`'s `prerequisite-patch-id:`, found by searching patchwork
@@ -2297,6 +2565,18 @@ guides. When in doubt, these are the ground truth:
 - <https://opensource.com/article/18/8/first-linux-kernel-patch>
 - <https://www.linaro.org/blog/becoming-a-kernel-developer-part1-posting-your-first-patch/>
 - <https://nickdesaulniers.github.io/blog/2017/05/16/submitting-your-first-patch-to-the-linux-kernel-and-responding-to-feedback/>
+
+**The series tool and the tracking page**
+- `b4` — contributor workflow (`prep`, `send`, `trailers`, deps):
+  <https://b4.docs.kernel.org/en/latest/contributor/overview.html>, source
+  <https://github.com/mricon/b4>
+- `jlelli/claude-kernel-reviews` `/track`, `/status`, `/update` — used here only
+  for the foreign series in the dependency list:
+  <https://github.com/jlelli/claude-kernel-reviews>
+- SoC-tree rules the DTS-last ordering comes from:
+  <https://docs.kernel.org/process/maintainer-soc.html>
+- The page itself (state, never copied into this skill):
+  <https://github.com/llg179org/fp3-pmaports/blob/main/docs/upstreaming/STATUS.md>
 
 **Kernel review tooling — prior art the "Self-review" pass is built on**
 - The submit checklist enumerated in that pass:
