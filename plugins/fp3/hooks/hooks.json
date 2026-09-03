@@ -1,5 +1,16 @@
 {
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/risky-target.cjs\""
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "Bash",
@@ -24,17 +35,15 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/autonomy.cjs\""
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/queue.cjs\""
           }
         ]
-      }
-    ],
-    "UserPromptSubmit": [
+      },
       {
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/autonomy.cjs\""
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/results-guard.cjs\""
           }
         ]
       }
@@ -44,7 +53,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/autonomy.cjs\""
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/queue.cjs\""
           }
         ]
       }
@@ -54,18 +63,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/autonomy.cjs\""
-          }
-        ]
-      }
-    ],
-    "PreToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/autonomy.cjs\""
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/precompact-status.cjs\""
           }
         ]
       }
