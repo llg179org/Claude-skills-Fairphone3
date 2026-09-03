@@ -2636,7 +2636,8 @@ guides. When in doubt, these are the ground truth:
 
 This skill improves the same way the other two do, through the shared logs
 `fp3-porting-debug` owns ("Feeding the method back"). Append a `NEW`-tagged entry
-to `fp3-skill-feedback-log.md` whenever a submission earns a *transferable*
+to `/mnt/1TB/Fp3-Sailfish/fp3-skill-feedback-log.md` (the full path — a bare
+filename got a second copy written 2026-09-03) whenever a submission earns a *transferable*
 lesson — a maintainer's response that contradicts something written here, a
 commit-form rule that turned out to matter, a citation that could not be
 verified. Review outcomes are not status to be tracked here; what belongs here is

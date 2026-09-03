@@ -339,7 +339,10 @@ from this skill verbatim; if it already exists, just append (never overwrite a l
 - **The investigation journal** → `FP3-slim-debug-journal.md`, template
   [`references/journal.template.md`](references/journal.template.md). The fault's
   `hypothesis→test→verdict` timeline; append every experiment + result, never rewrite history.
-- **The skill-feedback log** → `fp3-skill-feedback-log.md`, template
+- **The skill-feedback log** → `/mnt/1TB/Fp3-Sailfish/fp3-skill-feedback-log.md`
+  (☠️ the full path, because naming it by bare filename produced a second copy in
+  `~/.claude/skills/` that two windows wrote to independently — found 2026-09-03),
+  template
   [`references/skill-feedback-log.template.md`](references/skill-feedback-log.template.md).
   Whenever you hit a *transferable* lesson (a new brick-safety class, a measurement-integrity
   trap, a better recipe, or a **correction to a claim in one of these skills / their
