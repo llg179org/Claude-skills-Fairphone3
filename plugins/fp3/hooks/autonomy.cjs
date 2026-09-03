@@ -291,7 +291,14 @@ function ownershipBlock(s) {
 // running measurement. Waiting items hold the plan, not the turn.
 // (an "open" item is todo or doing; whether it is ACTIONABLE additionally depends
 // on its prerequisites - see actionableItems() below)
-const waitingItems = (s) => s.items.filter((i) => i.status === 'waiting');
+// ☠️ WAITING NOW MEANS "WAITING ON SOMETHING OUTSIDE THE PLAN". Since blockedItems
+// admits `waiting` too, an item waiting on item 116 belongs to exactly one of the
+// two buckets - and when this filter still returned all of them, the Stop summary
+// printed those seven items twice: once in its own list and again in the BLOCKED
+// block underneath. Caught by reading the hook's own output one turn after
+// installing it, which is the only reason it did not stand.
+const waitingItems = (s) => s.items.filter((i) =>
+  i.status === 'waiting' && !blockers(s, i).all.length);
 // The hash is what the anti-spin budget watches, so EVERY kind of progress must
 // be in it - including a recorded fact, which is the only progress there is on a
 // turn whose whole job was to write down a result.
