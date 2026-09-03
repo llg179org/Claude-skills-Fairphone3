@@ -674,14 +674,24 @@ b4 --version >/dev/null 2>&1 || echo "MISSING: b4 — pipx install b4   (or apk 
 ls ~/.claude/plugins 2>/dev/null | grep -qi kernel-review || echo "MISSING: jlelli/claude-kernel-reviews plugin (/plugin marketplace add jlelli/claude-kernel-reviews)"
 
 # 4. the series branches use the upstreaming/ namespace, not submit/
-git -C <fork> for-each-ref --format='%(refname:short)' 'refs/heads/upstreaming/*' 'refs/remotes/fork/upstreaming/*' | head
-git -C <fork> for-each-ref --format='%(refname:short)' 'refs/heads/submit/*' | grep -q . \
+# ☠️ no glob, or '**' — for-each-ref matches a single '*' with WM_PATHNAME, so it
+# does NOT cross a '/', and every legacy branch is submit/<base>/<cat>, two deep.
+# Measured 2026-09-03: 'refs/heads/submit/*' printed 0 while 7 such branches existed,
+# i.e. the check reported a clean namespace unconditionally.
+git -C <fork> for-each-ref --format='%(refname:short)' refs/heads/upstreaming refs/remotes/fork/upstreaming | head
+git -C <fork> for-each-ref --format='%(refname:short)' refs/heads/submit | grep -q . \
   && echo "LEGACY: submit/* branches still present — tag them archive/submit-<base>-<cat>-final and stop using them"
 
 # 5. the merge window is not open (never answer this from the tag list)
 curl -s https://www.kernel.org/releases.json | python3 -c \
   'import json,sys; r=[x for x in json.load(sys.stdin)["releases"] if x["moniker"]=="mainline"][0]; print(r["version"], r["released"]["isodate"])'
 ```
+
+☠️ **Run every gate command against a case it must catch before trusting a clean
+answer.** Item 4 above shipped for weeks in a form that could never fire (see the
+comment in it), and item 5 has a sibling trap of the same shape. A gate that has
+not been shown failing has proved nothing — the same rule the private CLAUDE.md
+records for the `curl -sL` tarball check.
 
 Item 5: a version containing `-rc` means the rc phase is running and sending is
 allowed; a bare `vX.Y` means the merge window has just opened — wait. ☠️
