@@ -720,11 +720,35 @@ function main() {
       `${r.ready[0].text.slice(0, 60)}`,
     reason: ask +
       `The next task in the queue (${TODO}):\n\n${describe(r.ready[0])}\n\n` +
-      `Do this one. When it is finished mark it \`[x]\` there — or move it to ` +
-      `TODO-DONE.md, which is what satisfies anything with \`after: ${r.ready[0].id}\`.\n` +
+      // ☠️ SAY THE WHOLE CLOSING PROCEDURE HERE, AND NAME THE COMMAND. Nothing in
+      // this system closes a task: the agent does, and it only does what it was
+      // told at the moment it mattered. This text used to say "mark it `[x]`
+      // there" - which is now exactly the wrong thing, because `[x]` left sitting
+      // in the queue is a task nobody archived - and it named no command at all.
+      // Moving the manual step from "edit the file" to "run a command nobody
+      // mentions" is not an improvement.
+      `Do this one. Then close it in one command — it archives the task to ` +
+      `TODO-DONE.md, releases your claim, and is what satisfies anything with ` +
+      `\`after: ${r.ready[0].id}\`:\n` +
+      `  node "${__filename}" done ${r.ready[0].id}\n\n` +
+      // ☠️ AND THE OUTPUT IS PART OF CLOSING, NOT A SEPARATE CHORE. `done` moves
+      // the task; it cannot know what the work MEANT. That judgement is the
+      // agent's, and it has to arrive with the task rather than later from a
+      // different gate, or it arrives after the context that could make it.
+      `☠️ Closing is not only the marker. Whatever this task measured goes, by ` +
+      `hand, to:\n` +
+      `  raw data → docs/power/bringup/captures/<date>_<name>/ with its own README.md\n` +
+      `  the dated finding → docs/power/bringup/findings-log.md\n` +
+      `  docs/power/README.md — ONLY if it changes what the phone does today\n` +
+      `  never delete a disproven claim; write down why it fell\n\n` +
       `If it turns out not to be startable, say so by changing its marker rather ` +
-      `than by writing a note: \`[~]\` with an \`until:\` for something outside the ` +
-      `session, \`[@]\` with \`when:\` and \`they-do:\` for a person.\n` +
+      `than by writing a note:\n` +
+      `  node "${__filename}" mark ${r.ready[0].id} '~'   +  set ${r.ready[0].id} until <when>` +
+      `   (waiting on something outside this session)\n` +
+      `  node "${__filename}" mark ${r.ready[0].id} '@'   +  set … when/they-do` +
+      `   (needs a person)\n` +
+      `  node "${__filename}" release ${r.ready[0].id}` +
+      `   (hand it back untouched, for another window)\n` +
       (r.ready.length > 1 ? `(${r.ready.length - 1} more ready behind it.)\n` : ''),
   }));
   process.exit(0);
