@@ -114,6 +114,27 @@ const idsOf = (t) => String(t.after || '').split(/[,\s]+/).filter(Boolean).map(N
 // Finished tasks leave this section for TODO-DONE.md, so "after: 116" with no 116
 // in the queue is the normal way a dependency is satisfied. The failure mode is a
 // typo, which would silently look finished - so it is never silent.
+// ☠️ A CYCLE IN `after:` SILENTLY BLOCKS EVERYTHING IN IT, and looks exactly like
+// a queue that is legitimately waiting. Ported from autonomy.cjs, which refused
+// cycles at write time; here the queue is a hand-edited file, so it has to be
+// detected at read time instead. Nothing else in this hook can tell the
+// difference between "blocked" and "blocked for ever".
+function cycles(tasks) {
+  const byId = new Map(tasks.filter((t) => t.id != null).map((t) => [t.id, t]));
+  const seen = new Map();           // id -> 0 visiting, 1 done
+  const found = [];
+  const walk = (id, stack) => {
+    if (seen.get(id) === 1) return;
+    if (seen.has(id)) { found.push([...stack.slice(stack.indexOf(id)), id].join(' → ')); return; }
+    seen.set(id, 0);
+    const t = byId.get(id);
+    if (t) for (const n of idsOf(t)) walk(n, [...stack, id]);
+    seen.set(id, 1);
+  };
+  for (const t of tasks) if (t.id != null) walk(t.id, []);
+  return [...new Set(found)];
+}
+
 function blockedBy(t, byId) {
   const out = { open: [], unknown: [] };
   for (const id of idsOf(t)) {
@@ -183,12 +204,16 @@ function report(tasks) {
     else if (t.mark === '~') waiting.push(t);
     else ready.push(t);
   }
-  return { ready, blocked, waiting, human, byId };
+  return { ready, blocked, waiting, human, byId, cycles: cycles(tasks) };
 }
 
 function idleText(r, tasks) {
   const n = nextUp(tasks);
   const lines = [];
+  if (r.cycles.length) {
+    lines.push(`☠️ CIRCULAR \`after:\` — these can never start, and it does not look ` +
+      `different from waiting:\n  ${r.cycles.join('\n  ')}`);
+  }
   lines.push(r.waiting.length || r.blocked.length || r.human.length
     ? `IDLE — nothing can be started here: ${r.waiting.length} waiting on something outside ` +
       `this session, ${r.blocked.length} blocked behind another task, ${r.human.length} with a person.`
@@ -252,6 +277,7 @@ function main() {
       for (const t of r.blocked) console.log(`  [⛔] ${t.id}. ${t.text}   ← after ${t._b.open.join(', ')}`);
       for (const t of r.waiting) console.log(`  [~] ${t.id}. ${t.text}${t.until ? `   ← until ${t.until}` : ''}`);
       for (const t of r.human) console.log(`  [@] ${t.id}. ${t.text}`);
+      if (r.cycles.length) console.log(`\n☠️ circular after:  ${r.cycles.join('\n                    ')}`);
     }
     if (unknown.length) {
       console.log(`\n☠️ prerequisites not in the queue (treated as met — check for a typo): ${unknown.join(', ')}`);
