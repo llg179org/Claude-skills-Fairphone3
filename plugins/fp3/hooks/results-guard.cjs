@@ -53,6 +53,8 @@ const LOG = 'docs/power/bringup/findings-log.md';
 let gatelog = null;
 try { gatelog = require('./gatelog.cjs'); } catch { /* optional */ }
 const gl = (fn, ...a) => { try { return gatelog ? gatelog[fn](...a) : ''; } catch { return ''; } };
+let t = (k, p) => k;
+try { ({ t } = require('./lang.cjs')); } catch { /* English keys as a last resort */ }
 
 const readState = () => {
   try { return JSON.parse(fs.readFileSync(STATE, 'utf8')); } catch { return {}; }
@@ -150,11 +152,10 @@ function magnitude(text) {
 }
 
 // ---------------------------------------------------------------- 3. scope
-// ☠️ The Hungarian words stay in the pattern even though the pages are English:
-// the same claim gets typed in either language, and a check that only catches one
-// of them is a check with a hole in exactly the place its author is least
-// careful.
-const UNIVERSAL = /\b(always|never|persistent|permanent|survives?|every boot|invariably|mindig|soha|perzisztens|t[uú]l[eé]li|minden booton)\b/i;
+// The pages under docs/ are English by repository rule, so the pattern is
+// English only. (An earlier version also matched the Hungarian equivalents; they
+// went with the rule that everything in the repository is English.)
+const UNIVERSAL = /\b(always|never|persistent|permanent|survives?|every boot|invariably)\b/i;
 const SCOPED = /\b(scope:|measured on|n\s*=\s*\d|one boot|one leg|only .* was varied)/i;
 // ☠️ TUNED ON ITS OWN FIRST FIRING, WHICH WAS 4/4 FALSE. It flagged a heading
 // ("An enabled unit would have started on every boot"), an instruction in a
@@ -287,7 +288,7 @@ function main() {
   }
   process.stdout.write(JSON.stringify({
     decision: 'block',
-    systemMessage: `[eredmény-őr] ${un.length} rögzítetlen eredmény`,
+    systemMessage: t('results.unrecorded', { n: un.length }, ev.cwd),
     reason: ask + body,
   }));
   process.exit(0);

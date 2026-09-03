@@ -117,6 +117,7 @@ and every time one blocks is logged by `gatelog.cjs` so that a gate can be
 | `precompact-status.cjs` | `PreCompact` | writes a status snapshot from the transcript before the context goes |
 | `hooks-toggle.cjs` | — (CLI) | `on` / `off` / `status`, editing only the `hooks` key |
 | `gatelog.cjs` | — (library + CLI) | the append-only record of every block and its verdict (`catch` / `false` / `override`) |
+| `lang.cjs` | — (library + CLI) | the one-line `systemMessage` a hook shows the person, in the language Claude Code is configured for (`/config` → Language, read from `.claude/settings.json`, project over user). Everything else in the repository, including the model-facing hook text, is English |
 
 ### `queue.cjs` — one queue, two lanes, one phone
 

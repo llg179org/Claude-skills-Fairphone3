@@ -9,19 +9,20 @@
 // ☠️ WHY THIS REPLACES `autonomy.cjs`. That hook kept its own plan: 124 items and
 // 100 recorded facts in a state file, beside a `docs/TODO.md` that had not been
 // touched in four days. Two lists is not redundancy, it is a question with two
-// answers - "the user's words: külön van listája a hooknak és külön van todo csak
-// megnehezíti a feladatok követését". And measured on the live state, the per-turn
+// answers - in the user's words (translated): "the hook having its own list
+// beside the TODO only makes the tasks harder to follow". And measured on the live state, the per-turn
 // reminder it emitted was 71 % fact list against 24 % anything to do with the
 // work, so the thing it interrupted every turn to say was mostly not the work.
 //
-// The specification this file implements, in the user's words:
+// The specification this file implements, in the user's words (translated
+// from Hungarian):
 //
-//   "a hooknak egyáltalán nem kellene listát tartalmaznia, hiszen ott a TODO. A
-//    hook dolga csak annyi, hogy a leállt agentnek megüzeni mi a következő
-//    feladat, és csak addig hagyja aludni az agentet, amíg a háttérben futó
-//    tevékenység indokolja (de ha nincs futó feladat, akkor ne altasson
-//    fölöslegesen). A hook egyetlen célja, hogy a feladatok ki legyenek osztva és
-//    folyamatos legyen a haladás fölösleges várakozások nélkül."
+//   "The hook should not contain a list at all - the TODO is there for that.
+//    The hook's only job is to tell a stopped agent what the next task is, and
+//    to let the agent sleep only as long as an activity running in the
+//    background justifies it (and if nothing is running, not to put it to sleep
+//    needlessly). The hook's single purpose is that tasks get handed out and
+//    progress is continuous, with no needless waiting."
 //
 // So: THE QUEUE IS A SECTION OF docs/TODO.md. This file parses it and holds no
 // tasks of its own. What it does keep is one integer - see ANTI-SPIN below - and
@@ -41,6 +42,9 @@ const path = require('path');
 let gatelog = null;
 try { gatelog = require('./gatelog.cjs'); } catch { /* optional */ }
 const gl = (fn, ...a) => { try { return gatelog ? gatelog[fn](...a) : ''; } catch { return ''; } };
+// The person-facing one-liners, in the configured language (lang.cjs).
+let t = (k, p) => k;
+try { ({ t } = require('./lang.cjs')); } catch { /* English keys as a last resort */ }
 
 const TODO = process.env.FP3_QUEUE_FILE ||
   '/mnt/1TB/pmos/fp3-pmaports/docs/TODO.md';
@@ -58,8 +62,8 @@ const STATE_DIR = process.env.CLAUDE_STATE_DIR ||
 const STATE = path.join(STATE_DIR, 'fp3-queue.json');
 
 // ☠️ CLAIMS EXIST BECAUSE TWO WINDOWS GOT THE SAME TASK. Measured 2026-09-03
-// with two simulated sessions against one queue: both were handed "1. Elso
-// feladat". Nothing in the design stopped that - the hook read the file, took
+// with two simulated sessions against one queue: both were handed the same
+// "1. First task". Nothing in the design stopped that - the hook read the file, took
 // ready[0] and blocked, and read-only is not coordination.
 //
 // ☠️ AND THE CLAIM DELIBERATELY DOES NOT LIVE IN TODO.md. Writing the claim into
@@ -209,8 +213,8 @@ function completions() {
 //   [x]  done — set by hand; `done <id>` moves the task out instead
 //
 // ☠️ THE KEYS ARE FEW ON PURPOSE. Every key here replaces prose that used to say
-// the same thing worse: `after:` replaces "PARKOL, a 116. mögé", `until:`
-// replaces "a telefon foglalt 16:02-ig". A note that states a schedule in words
+// the same thing worse: `after:` replaces "PARKED, behind item 116", `until:`
+// replaces "the phone is busy until 16:02". A note that states a schedule in words
 // goes stale silently and nothing re-reads it; a key is checked on every parse.
 // ☠️ `continues:` IS NOT `after:`, AND THE LIVE QUEUE SHOWS WHY. Seven tasks sit
 // `after: 85`, but only one of them - "evaluate the night's balance" - is a
@@ -843,8 +847,8 @@ function main() {
   gl('log', 'queue', `task ${r.ready[0].id}`);
   process.stdout.write(JSON.stringify({
     decision: 'block',
-    systemMessage: `[sor] következő feladat: ${r.ready[0].id != null ? `${r.ready[0].id}. ` : ''}` +
-      `${r.ready[0].text.slice(0, 60)}`,
+    systemMessage: t('queue.next', { id: r.ready[0].id != null ? `${r.ready[0].id}. ` : '',
+      text: r.ready[0].text.slice(0, 60) }, ev.cwd),
     reason: ask +
       `The next task in the queue (${TODO}):\n\n${describe(r.ready[0])}\n\n` +
       // ☠️ SAY THE WHOLE CLOSING PROCEDURE HERE, AND NAME THE COMMAND. Nothing in

@@ -1,14 +1,14 @@
 #!/bin/bash
 # SPDX-License-Identifier: GPL-2.0-or-later
-# Reboot + kimenet-detektálás: USB-net (=bootolt pmOS) VAGY vissza-fastboot (=bukott).
-# A LOGFÁJL markerét figyeli (nincs pgrep self-match). Háttérben futtatandó (run_in_background).
+# Reboot + outcome detection: USB-net (=pmOS booted) OR back in fastboot (=failed).
+# Watches the LOG FILE marker (no pgrep self-match). Meant to run in the background (run_in_background).
 # usage: boot-watch.sh [from_fastboot|from_recovery] [watch_secs]
 set -uo pipefail
 source "$(dirname "$0")/fp3-env.sh"
 FROM=${1:-from_fastboot}
 SECS=${2:-120}
 BLOG=$FP3_ROOT/pmos-boot.log
-BASE="lo enp4s0"   # host alap-interfészek; minden más = pmOS gadget
+BASE="lo enp4s0"   # host base interfaces; anything else = pmOS gadget
 printf '\n--- boot-watch %s (%s) ---\n' "$(date -Is)" "$FROM" >> "$BLOG"
 case "$FROM" in
   from_fastboot) have_fastboot && { echo "reboot from fastboot @ $(date +%H:%M:%S)" >>"$BLOG"; fb reboot >>"$BLOG" 2>&1; };;

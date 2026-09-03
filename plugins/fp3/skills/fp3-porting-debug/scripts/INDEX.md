@@ -30,19 +30,19 @@ directory.
 
 | script | what it does |
 |---|---|
-| `slot.sh` | A/B slot retry-count kezelés (fastboot módban!). usage: slot.sh get \| set [a\|b] \| active [a\|b] Megjegyzés: ezen az FP3 abooton a `set_active` NEM … |
-| `flash-pmos.sh` | pmOS flash-szekvencia (fastboot módban). Tartalmazza a vbmeta-disable lépést, ami a hybris/AVB-gyanú miatt KELL ("Fairphone powered by android -> fast… |
+| `slot.sh` | A/B slot retry-count handling (in fastboot mode!). usage: slot.sh get \| set [a\|b] \| active [a\|b] Note: on this FP3 aboot `set_active` does NOT … |
+| `flash-pmos.sh` | pmOS flash sequence (in fastboot mode). Includes the vbmeta-disable step, which is REQUIRED because of the hybris/AVB suspicion ("Fairphone powered by android -> fast… |
 | `flash-a10.sh` | Faithful, NON-INTERACTIVE re-implementation of Fairphone's flash_fp3_factory.sh for FP3-REL-Q-3.A.0136 (Android 10), with TWO deliberate deviations: |
-| `twrp.sh` | TWRP indítás. Mivel `fastboot boot twrp.img` az FP3 abooton FAILED ('unknown reason'), két megbízható út van: 1) flash a boot_b slotra + set_active b … |
-| `twrp-dd.sh` | TWRP-adb úton image partícióra írása (mert `fastboot boot` az FP3 abooton tiltott/megbízhatatlan). Sparse Android image-et simg2img-gal ír; nyers imag… |
-| `to-twrp.sh` | IDLE → TWRP TÖLTÉS.  A mainline pmOS kernelben NINCS FP3/PMI632 charger+fuelgauge driver (csak qcom,pmi632-typec látszik, CURRENT_NOW=0) → pmOS-ben az… |
+| `twrp.sh` | TWRP launch. Since `fastboot boot twrp.img` FAILED on the FP3 aboot ('unknown reason'), there are two reliable routes: 1) flash to the boot_b slot + set_active b … |
+| `twrp-dd.sh` | Writing an image to a partition over TWRP-adb (because `fastboot boot` is forbidden/unreliable on the FP3 aboot). Writes a sparse Android image with simg2img; a raw imag… |
+| `to-twrp.sh` | IDLE → TWRP CHARGING.  The mainline pmOS kernel has NO FP3/PMI632 charger+fuelgauge driver (only qcom,pmi632-typec is visible, CURRENT_NOW=0) → in pmOS the… |
 | `to-pmos.sh` | TWRP/recovery → back to pmOS: `set_active b` → lk2nd (`boot_b`) → pmOS. Only adds the "get out of TWRP first" step around the ordinary slot switch. (Fixed 2026-07-28: it used to `set_active a`, correct only in the pre-dual-slot layout.) |
 | `swap-to-pmos.sh` | **NOT the way to switch OS** (that is `slot.sh set b` + reboot, no flashing). Reinstalls pmOS from scratch — use only when the pmOS side is broken, e.g. lk2nd was overwritten. |
 | `swap-to-ut.sh` | **NOT the way to switch OS** (that is `slot.sh set a` + reboot, no flashing). Repair path only: restores the dev-enabled UT backup when slot a has been damaged. ☠️ Flashes TWRP onto `boot_b` (today lk2nd) and rewinds `userdata`. |
 | `setup-dualslot.sh` | ONE-TIME dual-slot install: pmOS -> slot _b (rootfs on system_b), UT stays on _a. After this, OS-swap is a single `fastboot set_active a\|b` + reboot … |
-| `boot-watch.sh` | Reboot + kimenet-detektálás: USB-net (=bootolt pmOS) VAGY vissza-fastboot (=bukott). A LOGFÁJL markerét figyeli (nincs pgrep self-match). Háttérben fu… |
+| `boot-watch.sh` | Reboot + outcome detection: USB-net (=pmOS booted) OR back-to-fastboot (=failed). Watches the LOG FILE's marker (no pgrep self-match). Runs in the backgro… |
 | `flash-wait-capture.sh` | Wait for the device to appear in fastboot (user puts it there with Power+VolDown), then flash the already-built rootfs (pmb install already ran) to sy… |
-| `sd-fsck.sh` | SD-kártya debug-log workflow: ha a telefon az SD-jére írja a boot/debug logot, a (vfat) "dirty bit" miatt máshol nem/koszosan mountolódik. Ez umountol… |
+| `sd-fsck.sh` | SD-card debug-log workflow: if the phone writes the boot/debug log to its SD card, the (vfat) "dirty bit" means it does not mount elsewhere / mounts dirty. This unmounts… |
 | `restore-pw.sh` | Restore sane PipeWire/ALSA state on the device: Amp Mode plus headphone and speaker volumes, and restart the user PipeWire stack. |
 | `diag-pw.sh` | Dump the PipeWire/ALSA side of the audio state: Amp Mode enum, jack switches, sinks and current routing. |
 | `ut-backup.sh` | Back up developer-enabled UT (slot a) partition images for installer-free pmOS<->UT swap. |
@@ -64,7 +64,7 @@ directory.
 | `gbm_stride_test.py` | What stride does the GPU require for a given format and width? Asks the GBM allocator, which shares its layout code with the importer, and finds the alignment step by bisection rather than inferring it from a driver's complaint. |
 | `gcc_snapshot.py` | Zero-risk full GCC block snapshot for UT<->pmOS environmental diff (context §9 step 1). GCC (msm8953 qcom,gcc-msm8953) reg = <0x01800000 0x80000> is a… |
 | `fdt_slim.py` | Minimal flattened-device-tree reader: walk a .dtb and print nodes and properties without needing dtc. |
-| `build_ut_p1.py` | Build a UT p1 (vfat firmware) image from a PAS-signed adsp mbn, using the PROVEN compact-mdt + full-split recipe (folyt.80, confirmed vs ut-p1-hwl4.im… |
+| `build_ut_p1.py` | Build a UT p1 (vfat firmware) image from a PAS-signed adsp mbn, using the PROVEN compact-mdt + full-split recipe (cont. 80, confirmed vs ut-p1-hwl4.im… |
 
 ### Audio: routing, playback and capture checks
 
@@ -122,7 +122,7 @@ directory.
 
 | script | what it does |
 |---|---|
-| `diag.sh` | Roncsolásmentes diagnosztika TWRP-ből (retry-t NEM fogyaszt). - boot_a tényleg lk2nd-e?  - utolsó-boot kernel-log (pstore/ramoops) |
+| `diag.sh` | Non-destructive diagnostics from TWRP (does NOT consume a retry). - is boot_a really lk2nd?  - last-boot kernel log (pstore/ramoops) |
 | `diag-adsp.sh` | Collect ADSP state on-device: remoteproc status, uptime, kernel version and related logs. |
 | `diagtap.py` | Minimal DIAG-over-rpmsg tap for mainline pmOS (msm8953). The ADSP/modem DIAG SMD channels are exposed as /dev/rpmsgN char devices. |
 | `diagcap.py` | Capture ADSP F3 debug messages across an SSR (fresh SLIMbus framer bring-up). Re-arms DIAG F3 masks continuously so the fresh ADSP starts streaming AS… |
@@ -131,12 +131,12 @@ directory.
 | `ut-bootdiag.service` | Boot-armed capture unit for UT, for events that happen before userspace is up (the ADSP leaves reset at ~t=21.9 s). `Type=simple` so it cannot stall the boot; the script waits for `/dev/diag` itself. Install into `/etc/systemd/system`, `enable`, reboot. |
 | `parsef3.py` | Host-side F3 frame parser shared by both captures: de-stuffs the HDLC framing and yields `(timestamp, ss_id, line, file, format, args)` for extended (0x79) and terse/QSR (0x92) messages alike. |
 | `ut-trace.sh` | DOWNSTREAM (Ubuntu Touch / Halium 10, downstream 4.9.218 kernel) SLIMbus trace. Run from HOST while phone is booted into UT with adb (Halium adb runs … |
-| `ut-ssr-trace.sh` | UT ADSP SSR-recovery differenciál-trace (plan: lovely-dazzling-rain). A BIZONYÍTOTTAN működő UT-n (slot_a, halium-10.0 4.9.218) az ADSP-t SSR-rel |
+| `ut-ssr-trace.sh` | UT ADSP SSR-recovery differential trace (plan: lovely-dazzling-rain). On the PROVEN-working UT (slot_a, halium-10.0 4.9.218) the ADSP is, via SSR, |
 | `ut-capture-framer.sh` | Enhanced WORKING-framer capture on Ubuntu Touch (downstream 4.9 kernel) for the on-device A/B vs mainline pmOS. The KEY additions over ut-trace.sh: |
 | `los-trace.sh` | DOWNSTREAM (LineageOS A15 eng/userdebug, downstream 4.9 kernel) SLIMbus trace capture. Run from HOST while the phone is booted into LineageOS with adb… |
 | `pdr_trace.sh` | Trace PDR (protection-domain restart) activity: service registry notifications and the audio_pd/servreg path. |
 | `capture-dbg.sh` | Config lives in fp3-env.sh; every value there has a documented default. |
-| `downstream-capture.sh` | FUTTASD a MŰKÖDŐ downstream rendszeren (Ubuntu Touch VAGY stock Android), rootként (UT: `sudo`; Android: `adb shell su`). A kimenetet küldd vissza. |
+| `downstream-capture.sh` | RUN on the WORKING downstream system (Ubuntu Touch OR stock Android), as root (UT: `sudo`; Android: `adb shell su`). Send the output back. |
 | `pmos-diag-capture.sh` | pmos-diag-capture.sh — run on pmOS as root (echo PW \| sudo -S bash THISFILE). Bind the ADSP DIAG (data) + DIAG_CNTL (gated to c200000), push the F3 m… |
 | `pmos-baseline.sh` | pmOS-side (mainline, "broken" SLIMbus) baseline capture for downstream diff |
 | `pmos-netcon-trigger.sh` | pmos-netcon-trigger.sh HOST_MAC  — run on pmOS as root. Bring up netconsole over the RNDIS link (device $FP3_DEV_IP -> host |
@@ -158,13 +158,13 @@ directory.
 
 | script | what it does |
 |---|---|
-| `discharge.sh` | GYORS AKKU-MERÍTÉS a duty-cycle charger-teszthez. pmOS-ben NINCS töltés → ott full terheléssel fogyasztjuk az akkut, amíg a TWRP-ben |
-| `charge-test.sh` | DUTY-CYCLE töltés-teszt harness (user-protokoll: rövid pmOS burst → TWRP hő-ellenőrzés). Cél: kísérleti charger-kód TERMIKUSAN biztonságos tesztelése … |
+| `discharge.sh` | FAST BATTERY DRAIN for the duty-cycle charger test. pmOS has NO charging → there we drain the battery under full load until in TWRP |
+| `charge-test.sh` | DUTY-CYCLE charging test harness (user protocol: short pmOS burst → TWRP thermal check). Goal: THERMALLY safe testing of experimental charger code … |
 | `powerlog-pmos.sh` | One line a minute of the pmOS power state, same fields and in the same order as `powerlog-ut.sh`, so the two files diff directly. Install it as a *system* unit, not with systemd-run: a transient unit dies at the next reboot and takes the measurement with it. |
 | `powerlog-ut.sh` | The same on Ubuntu Touch. Percent is not comparable between the two, since they run different gauges — compare the integrated current and the terminal voltage. Both sample while the logger itself is awake, which biases the mean upward the same way on each side. |
-| `fg-verify.sh` | fg-verify.sh — fuel-gauge (pmi632-battery) ellenőrzés pmOS-ben SSH-n. Kiolvassa a battery-psy capacity/voltage/status mezőit és a charger-psy-t, |
+| `fg-verify.sh` | fg-verify.sh — fuel-gauge (pmi632-battery) check in pmOS over SSH. Reads the battery-psy capacity/voltage/status fields and the charger-psy, |
 | `gen_ocv.py` | row-legend (centi-percent) and 25C column (3rd value, units of 100uV) from Kayo v1-lut |
-| `thermprobe.sh` | Per-zóna thermal-mintázás sha256sum-load alatt: melyik szenzor megbízható? |
+| `thermprobe.sh` | Per-zone thermal sampling under sha256sum load: which sensor is reliable? |
 
 ## `archive/`
 

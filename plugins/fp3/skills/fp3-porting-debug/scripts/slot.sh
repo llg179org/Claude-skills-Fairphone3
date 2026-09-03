@@ -1,16 +1,16 @@
 #!/bin/bash
 # SPDX-License-Identifier: GPL-2.0-or-later
-# A/B slot retry-count kezelés (fastboot módban!).
+# A/B slot retry-count handling (in fastboot mode!).
 # usage: slot.sh get | set [a|b] | active [a|b]
-# Megjegyzés: ezen az FP3 abooton a `set_active` NEM mindig nullázza vissza a
-# retry-count-ot 7-re. A retry-count IGAZI resetje a SIKERES boot (qbootctl-openrc
-# mark_boot_successful a pmOS-ben). Minden bukott boot -1; 0-nál a slot unbootable.
+# Note: on this FP3 aboot `set_active` does NOT always reset the
+# retry-count to 7. The REAL reset of the retry-count is a SUCCESSFUL boot (qbootctl-openrc
+# mark_boot_successful in pmOS). Every failed boot is -1; at 0 the slot is unbootable.
 set -uo pipefail
 source "$(dirname "$0")/fp3-env.sh"
 cmd=${1:-get}
 case "$cmd" in
   get)
-    have_fastboot || { echo "NEM fastboot módban (kell a fastboot)."; exit 1; }
+    have_fastboot || { echo "NOT in fastboot mode (fastboot required)."; exit 1; }
     for v in current-slot slot-count \
              slot-retry-count:a slot-retry-count:b \
              slot-successful:a slot-successful:b \
@@ -21,7 +21,7 @@ case "$cmd" in
     ;;
   set|active)
     s=${2:-a}
-    have_fastboot || { echo "NEM fastboot módban."; exit 1; }
+    have_fastboot || { echo "NOT in fastboot mode."; exit 1; }
     log "set_active $s"
     fb set_active "$s" 2>&1 | tail -2
     "$0" get | grep -E "current-slot|retry-count:$s|active:$s"

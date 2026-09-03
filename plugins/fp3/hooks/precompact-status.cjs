@@ -20,6 +20,8 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+let t = (k) => k;
+try { ({ t } = require("./lang.cjs")); } catch { /* English keys as a last resort */ }
 
 const CLAUDE_HOME = process.env.CLAUDE_CONFIG_DIR
   ? process.env.CLAUDE_CONFIG_DIR
@@ -151,6 +153,6 @@ function run() {
   // do). The snapshot file is already written above; surface the pointer via the
   // generic, always-valid `systemMessage` field instead so validation passes.
   process.stdout.write(JSON.stringify({
-    systemMessage: `[precompact-status] Status snapshot written to ${file} (and latest.md beside it). Read it after the compaction if the summary is thin.`,
+    systemMessage: t('precompact.written', { file }, data.cwd),
   }) + "\n");
 }
