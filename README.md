@@ -61,103 +61,106 @@ Then invoke with `/fp3-porting-debug`, `/fp3-kernel-test` or
 If you would rather not use plugins, copy or symlink the three directories under
 `plugins/fp3/skills/` into your own `~/.claude/skills/`.
 
-## The two hooks — what runs, when it fires, and how to drive it
+## Session start — what a fresh window does first
 
-The plugin ships **hooks as well as skills**, declared in
-`plugins/fp3/hooks/hooks.json`. Installing the plugin activates them; a
-skills-only copy does not. They are small, and they exist because two failure
-modes recurred often enough to be worth automating away.
+Everything below is method; the state it reads is the queue in
+[`fp3-pmaports/docs/TODO.md`](https://github.com/llg179org/fp3-pmaports/blob/main/docs/TODO.md)
+(`FP3-QUEUE` section) and, for submissions,
+[`docs/upstreaming/STATUS.md`](https://github.com/llg179org/fp3-pmaports/blob/main/docs/upstreaming/STATUS.md).
+Do not paste tonight's timer, item counts or "two items wait for you" into a
+start-up prompt — that is status, it is wrong within a day, and the queue hook
+prints the live version anyway.
 
-### `autonomy.cjs` — the plan that survives a turn boundary
-
-A run's plan lives outside the conversation, so a compaction or a long
-measurement does not lose it, and the model does not end a turn with work still
-open. It hooks four events:
-
-| event | what it does |
-|---|---|
-| `SessionStart` | hands the plan and the findings back — including `source=compact`, so a compaction resumes without waiting for the user to speak |
-| `PreCompact` | flushes the resume block to disk before the context goes |
-| `UserPromptSubmit` | re-injects the plan and returns the anti-spin budget |
-| `Stop` | blocks an early finish, and blocks when results have landed that nothing recorded |
-
-☠️ **`SessionStart` is the one that was missing, and the gap is not obvious.**
-Until 2026-08-31 the plan was injected on `UserPromptSubmit` only — but an
-autonomous run goes hours without a user prompt, so a session that came out of an
-auto-compaction ran blind until the user happened to say something. The state
-file had survived the whole time; nothing read it.
-
-**The resume block.** With `status <path>` set, the hook writes a generated block
-between `<!-- FP3-AUTONOMY-RESUME:BEGIN/END -->` markers at the top of that file,
-on every plan edit and before every compaction. That is the durable copy a
-resumed session reads first, and generating it is the point: the block it
-replaced was written by hand at the end of a session, so whatever the hand-written
-pass forgot was simply gone.
-
-**The staleness gate.** `watch <dir>` names a directory whose new contents mean a
-result landed. When something in it is newer than the last plan edit — or the
-docs tree has uncommitted changes — `Stop` blocks and asks for a `measured`,
-`retracted` or `note` before the turn ends, because that is exactly the state an
-auto-compaction turns into lost work. ☠️ It shares the anti-spin budget on
-purpose: a second budget is a second way to spin. ☠️ And it excludes the status
-file itself, which this hook writes — a gate that fires on its own output can
-never be cleared, and trains the reader to ignore the channel.
-
-```
-node autonomy.cjs start "<goal>"      begin a run
-node autonomy.cjs add "<step>" [...]  append steps
-node autonomy.cjs note <id> "<text>"  progress without finishing
-node autonomy.cjs wait <id> "<what>"  blocked on something OUTSIDE this session
-node autonomy.cjs done <id> <evidence> [-- <note>]   finished; EVIDENCE REQUIRED
-node autonomy.cjs drop <id> [why]     abandoned for good, with the reason
-node autonomy.cjs measured  <evidence> -- "<claim>"     a claim that now stands
-node autonomy.cjs retracted "<claim>" -- "<why it fell>" a claim that has fallen
-node autonomy.cjs status <path/to/STATUS.md>   where the resume block is written
-node autonomy.cjs watch <dir>         a directory whose new contents mean "a result landed"
-node autonomy.cjs flush               rewrite the resume block now
-node autonomy.cjs show                print the plan
-node autonomy.cjs stop                end the run
+```sh
+H=~/git/Claude-skills-Fairphone3/plugins/fp3/hooks
+node $H/hooks-toggle.cjs status          # are the hooks registered in ~/.claude/settings.json?
+node $H/hooks-toggle.cjs on              # if not (edits ONLY the `hooks` key)
+node $H/queue.cjs check                  # the queue as this window sees it
+node $H/queue.cjs next                   # the one task it would be handed
 ```
 
-**Evidence is one token, and every form but the last is checked to exist:**
-`<path>` · `<path>:<line>` (the file has at least that many lines) ·
-`commit:<sha>` (resolves in one of the known repos) · `capture:<dir>` ·
-`unverifiable:<why>` — the escape hatch, accepted but rendered as UNVERIFIED,
-because a gate with no way out is a gate that gets lied to.
+**Say which lane this window is**, or it stays lane-less and may be handed
+anything:
 
-☠️ **Why `done` demands an artefact.** Measured 2026-08-31: an item was closed
-with the note *"promoted to the skill (see below)"* — a forward reference that
-was never fulfilled. On resume it read as finished work, and the lesson it
-claimed to carry was nowhere. Free text will happily record a job that was not
-done; a path that must exist will not.
+```sh
+FP3_LANE=phone claude          # device-touching work — ONE window at a time, under a lease
+FP3_LANE=upstreaming claude    # mail, b4, the STATUS page — never the device
+node $H/queue.cjs lane phone   # the same, set from inside a running window
+```
 
-☠️ **Never delete a disproven claim — `retracted` it.** Five claims fell in 24 h
-on 2026-08-31, and a deleted one gets rediscovered by the next session with the
-same reasoning that produced it. The reason it fell is the load-bearing half.
+☠️ **Three things the commands do not say.** A `SessionStart` hook does not run
+for a window that was already open when the hooks were switched on — hence the
+manual `check`/`next` above; if the `Stop` hook does not fire after switching on,
+the settings change did not take effect in the running process and a new window
+is needed. And **never restore the hooks by copying a whole `settings.json`
+backup over the live file**: a backup is a snapshot of every key, and on
+2026-09-03 the documented `cp` recipe would have silently removed a plugin
+installed after the snapshot. `hooks-toggle.cjs` writes one key and leaves a
+dated copy beside the file.
 
-☠️ **`wait` is the one that gets forgotten, and forgetting it has a specific
-cost.** A measurement window that must run its course, a build, a boot, an answer
-only the user can give — none of those is progress, and none is a reason to
-abandon a step. Marked `wait`, an item stays open and visible but stops holding
-the turn, and the Stop reminder goes quiet. Left unmarked, the reminder repeats,
-and the way to satisfy it is to *find something to do* — which on a
-measurement-heavy project means poking the device that a measurement needs left
-alone. Measured 2026-08-30: six turns of that, on a 30-minute window whose whole
-method was inaction, ending in a defect report about a feature the tool already
-had. Both advertised command lists had omitted `wait`; that is fixed, and the
-Stop reminder now names it explicitly.
+## The hooks — what runs, when it fires, and how to drive it
 
-☠️ Anti-spin is not optional: the Stop hook blocks at most `MAX_BLOCKS` times
-without the plan changing, then says so and lets the turn end. A hook that always
-blocks is an infinite loop.
+Declared in `plugins/fp3/hooks/hooks.json`; installing the plugin activates
+them, a skills-only copy does not. The operator's `~/.claude/settings.json`
+points at symlinks in `~/.claude/hooks/` into `plugins/fp3/hooks/` — one copy
+of each. Every gate is listed, with its incident and its review date, in
+[`fp3-pmaports/docs/gates.md`](https://github.com/llg179org/fp3-pmaports/blob/main/docs/gates.md),
+and every time one blocks is logged by `gatelog.cjs` so that a gate can be
+*removed* on evidence, not only added.
+
+| hook | events | job |
+|---|---|---|
+| `queue.cjs` | `Stop`, `SessionStart` | hands a stopped window its next task from the queue, in its lane; holds no list of its own |
+| `measurement-watch.cjs` | `PostToolUse` (Bash), `Stop` | a measurement started on the device (`systemd-run --unit=…`) and its background watcher are one object |
+| `results-guard.cjs` | `Stop` | a result that landed and nothing recorded; plus magnitude / scope / witness lints on what is written |
+| `risky-target.cjs` | `PreToolUse` (Bash, Edit, Write) | says the trap out loud before a command or edit touches boot config, flashing, the USB-input bit, `apk` |
+| `precompact-status.cjs` | `PreCompact` | writes a status snapshot from the transcript before the context goes |
+| `hooks-toggle.cjs` | — (CLI) | `on` / `off` / `status`, editing only the `hooks` key |
+| `gatelog.cjs` | — (library + CLI) | the append-only record of every block and its verdict (`catch` / `false` / `override`) |
+
+### `queue.cjs` — one queue, two lanes, one phone
+
+The queue is a section of `docs/TODO.md`; the hook parses it and keeps nothing
+but a per-window anti-spin counter, the claims, and the phone lease. Every
+write to the section goes through the tool, under one lock, because several
+windows edit it in the same minute:
+
+```
+queue.cjs add "<text>" -- "after: 12; lane: phone; why: …"   # id allocated inside the lock
+queue.cjs set <id> after|continues|until|when|they-do|why|lane <value>
+queue.cjs mark <id> ' '|x|~|@
+queue.cjs done <id>        # archives to TODO-DONE.md, releases the claim and the phone
+queue.cjs release <id>     # hand it back untouched
+queue.cjs drop <id>        # a mistaken add — removed, not archived
+queue.cjs lane phone|upstreaming|any
+queue.cjs check | next | claims
+```
+
+Markers: `[ ]` ready · `[~]` waiting on something outside the session (`until:`)
+· `[@]` needs a person (`when:`, `they-do:`) · `[x]` done — and `done <id>`
+moves it out, an `[x]` left in the queue is a task nobody archived.
+
+**Lanes.** `lane: phone` marks a task that touches the device, `lane:
+upstreaming` one that must not, no lane is anybody's. A window is handed only
+tasks of its own lane or of none. Claiming a `phone` task takes the **phone
+lease**; `done`/`release` gives it back; a running unattended measurement (the
+watch hook's state) holds it too. While it is held, no other window is handed a
+phone task — `claims` shows who has it. Measured with two simulated windows and
+a fake measurement before it shipped.
+
+**Affinity.** `continues: <id>` (not `after:`) marks a follow-on that carries the
+same context; it is offered back to the window that finished `<id>` first, for
+15 minutes, then to anybody.
+
+☠️ Anti-spin: the `Stop` hook blocks at most three times for one unchanged
+queue, then says so and lets the turn end. A hook that always blocks is an
+infinite loop. ☠️ Idle is not a block: with nothing startable it says so once,
+names what is waiting on whom, and tells the window *not* to invent work.
 
 ### `measurement-watch.cjs` — a measurement and its watcher are one object
 
-Hooks `PostToolUse` on Bash and `Stop`. It notices a long-running unit started on
-the device (`systemd-run --unit=…`) with no watcher paired to it, and says so.
-
-☠️ The template it suggests needs **both** of its guards, each of which was
-learned by losing a run:
+☠️ The template it suggests needs **both** of its guards, each learned by losing
+a run:
 
 * **wait for the unit to appear first.** `systemctl show -p ActiveState` answers
   `inactive` for a unit that does not exist yet, so a watcher started in the same
@@ -168,17 +171,29 @@ learned by losing a run:
   which for a sleep measurement is exactly when it is working — measured the same
   day, where a 90-minute run was reported finished 11 seconds in.
 
-### Two more, not part of the plugin
+☠️ **And the gate itself was dead for days while registered.** Two template
+strings with no `+` between them are a tagged-template call: `node --check`
+passed, and the hook threw on exactly its positive path, so no state was written
+and the `Stop` block never fired. Found 2026-09-03 by piping one synthetic
+launch into it. **After any hook edit, feed it the event it exists for and read
+the output** — a silent hook and a working hook look the same from outside.
 
-`risky-target.cjs` and `precompact-status.cjs` live in the operator's own
-`~/.claude/hooks/`. The first warns before a destructive device action; the second
-writes a status snapshot before a compaction, so the next context window starts
-from a file rather than from a summary.
+### `results-guard.cjs` — a result that nothing recorded
 
-☠️ Keep one copy of each. These hooks existed twice for a while — once here and
-once under `~/.claude/hooks/` — and both repository copies fell behind, hiding a
-fix in the one that was actually running. The live paths are symlinks into
-`plugins/fp3/hooks/` now.
+Blocks once or twice when a capture directory is newer than
+`findings-log.md` and has no README, or `docs/power` has uncommitted changes;
+lints (never blocks) for an implausible magnitude, a universal word with no
+stated scope, and a `capture:`/`commit:` reference that does not resolve. An
+uncommitted `docs/upstreaming/` gets its own message: the STATUS.md row is the
+record, commit it.
+
+### `risky-target.cjs` and `precompact-status.cjs`
+
+The first keys on the *target* — `extlinux.conf`, `fastboot flash`,
+`USBIN_SUSPEND`, `apk add` — so it fires without anybody knowing they needed
+the deploy page; it never blocks. The second exists because an auto-compaction
+at 264k once arrived with no state saved; it reads the transcript already on
+disk and writes what a resumed session would otherwise reconstruct.
 
 ## The status line — `statusline.sh`
 

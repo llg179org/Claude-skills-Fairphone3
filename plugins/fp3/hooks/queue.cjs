@@ -763,6 +763,15 @@ function main() {
         additionalContext:
           `The work queue is the FP3-QUEUE section of ${TODO} — that file is the only ` +
           `list; this hook keeps none.\n` +
+          // ☠️ THE THREE METHOD LINES A START-UP PROMPT USED TO CARRY, delivered by
+          // the hook instead, so no prompt has to be kept current: this window's
+          // lane, how to change it, and where to read more.
+          `This window's lane: ${lane || `none (may be handed any task; set FP3_LANE=phone|upstreaming ` +
+            `in the environment, or run \`node "${__filename}" lane phone|upstreaming\`)`}. ` +
+          `Phone: ${r.busy || 'free'}. ` +
+          `Commands: \`node "${__filename}" check | next | claims\`; every write to the queue ` +
+          `goes through add/set/mark/done/release (several windows share it). ` +
+          `Method: Claude-skills-Fairphone3/README.md "Session start".\n` +
           (r.ready.length
             ? `Next task:\n${describe(r.ready[0])}`
             : idleText(r, tasks)),
