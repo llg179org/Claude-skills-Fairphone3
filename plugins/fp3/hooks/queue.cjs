@@ -123,9 +123,19 @@ function withLock(fn) {
 const readClaims = () => {
   try { return JSON.parse(fs.readFileSync(CLAIMS, 'utf8')); } catch { return {}; }
 };
+// ☠️ THE COMPLETION RECORD IS PRESERVED UNLESS THE CALLER REPLACES IT, and that
+// is not a nicety. Callers build their new state from `liveClaims()`, which
+// strips `__completed` because it is a different kind of record with a different
+// lifetime - so the first claim taken after a completion was silently erasing the
+// history the affinity depends on. Found by the first-refusal test, one step after
+// the feature it broke appeared to work.
 function writeClaims(c) {
   try {
     fs.mkdirSync(STATE_DIR, { recursive: true });
+    if (!('__completed' in c)) {
+      const prev = readClaims().__completed;
+      if (prev) c = Object.assign({}, c, { __completed: prev });
+    }
     const tmp = `${CLAIMS}.${process.pid}`;
     fs.writeFileSync(tmp, JSON.stringify(c, null, 1));
     fs.renameSync(tmp, CLAIMS);
@@ -135,6 +145,16 @@ function writeClaims(c) {
 // releases it by doing nothing.
 function liveClaims() {
   const c = readClaims(), out = {}, cut = Date.now() - CLAIM_TTL_MIN * 60000;
+  for (const [id, v] of Object.entries(c)) {
+    if (id === '__completed') continue;          // a different record with its own life
+    if (v && v.at > cut) out[id] = v;
+  }
+  return out;
+}
+// Completions expire on the affinity window, not the claim TTL: the claim is
+// "I am on it", the completion is "I still remember it".
+function completions() {
+  const c = (readClaims().__completed) || {}, out = {}, cut = Date.now() - AFFINITY_MIN * 60000;
   for (const [id, v] of Object.entries(c)) if (v && v.at > cut) out[id] = v;
   return out;
 }
@@ -153,7 +173,21 @@ function liveClaims() {
 // the same thing worse: `after:` replaces "PARKOL, a 116. mögé", `until:`
 // replaces "a telefon foglalt 16:02-ig". A note that states a schedule in words
 // goes stale silently and nothing re-reads it; a key is checked on every parse.
-const KEYS = ['after', 'until', 'when', 'they-do', 'why'];
+// ☠️ `continues:` IS NOT `after:`, AND THE LIVE QUEUE SHOWS WHY. Seven tasks sit
+// `after: 85`, but only one of them - "evaluate the night's balance" - is a
+// continuation of 85's work; the other six are merely GATED on its result and are
+// different work entirely (an SMSM A/B, a driver change, a wrapper). Reusing
+// `after:` for affinity would hand the agent that ran the replication a kernel
+// patch because both mention 85. Only the author knows which follow-on carries
+// the same context, so the author says so.
+const KEYS = ['after', 'continues', 'until', 'when', 'they-do', 'why'];
+
+// How long a finished task's context is worth reusing, and how long its successor
+// is held for the session that earned it. ☠️ Short on purpose: a session that
+// finishes and goes quiet must not park its successor, and an hour-old context is
+// not the advantage this exists to capture.
+const AFFINITY_MIN = 120;
+const FIRST_REFUSAL_MIN = 15;
 
 function parse(text) {
   const b = text.indexOf(BEGIN), e = text.indexOf(END);
@@ -275,7 +309,8 @@ function expired(tasks) {
 function report(tasks, me) {
   const byId = new Map(tasks.filter((t) => t.id != null).map((t) => [t.id, t]));
   const claims = liveClaims();
-  const ready = [], blocked = [], waiting = [], human = [], held = [];
+  const done = completions();
+  const ready = [], blocked = [], waiting = [], human = [], held = [], refused = [];
   for (const t of tasks) {
     if (t.mark === 'x') continue;
     if (t.mark === '@') { human.push(t); continue; }
@@ -288,10 +323,27 @@ function report(tasks, me) {
       // Mine is still mine: a window re-reading its own claim must get its task
       // back, or a second Stop in the same session would hand it something else.
       if (cl && me && cl.session !== me) { held.push({ t, cl }); continue; }
-      ready.push(t);
+      // ☠️ FIRST REFUSAL FOR THE SESSION THAT EARNED IT. When two agents finish at
+      // the same moment, whichever one stops first would otherwise take the
+      // other's follow-on - and a follow-on handed to an empty context is paid for
+      // twice: once to rebuild what the other agent already had, and once in the
+      // mistakes that rebuild makes. So a task that `continues:` something another
+      // session completed in the last FIRST_REFUSAL_MIN is skipped here. After
+      // that window it is anybody's: a held task is worse than a cold one.
+      const cont = String(t.continues || '').split(/[,\s]+/).filter(Boolean);
+      const own = cont.map((id) => done[id]).find(Boolean);
+      if (own && me && own.session !== me &&
+          Date.now() - own.at < FIRST_REFUSAL_MIN * 60000) {
+        refused.push({ t, own }); continue;
+      }
+      ready.push(own && own.session === me ? Object.assign(t, { _mine: true }) : t);
     }
   }
-  return { ready, blocked, waiting, human, held, byId,
+  // ☠️ MY OWN CONTINUATION GOES FIRST, and only that. Beyond it the file's order
+  // is the priority a person set, and a scheduler that reorders on its own guesses
+  // is a scheduler nobody can predict.
+  ready.sort((a, b) => (b._mine ? 1 : 0) - (a._mine ? 1 : 0));
+  return { ready, blocked, waiting, human, held, refused, byId,
     cycles: cycles(tasks), expired: expired(tasks) };
 }
 
@@ -315,6 +367,10 @@ function idleText(r, tasks) {
   if (r.waiting.length) parts.push(`${r.waiting.length} waiting on something outside this session`);
   if (r.blocked.length) parts.push(`${r.blocked.length} blocked behind another task`);
   if (r.human.length) parts.push(`${r.human.length} with a person`);
+  if (r.refused.length) {
+    parts.push(`${r.refused.length} held briefly for the session that earned them (` +
+      r.refused.map(({ t, own }) => `${t.id}→${own.session}`).join(', ') + ')');
+  }
   if (r.held.length) {
     parts.push(`${r.held.length} claimed by another window (` +
       r.held.map(({ t, cl }) => `${t.id}→${cl.session}`).join(', ') + ')');
@@ -361,8 +417,8 @@ function main() {
   // ☠️ THE SESSION ID COMES FROM THE HOOK INPUT, and the hook was throwing it
   // away: `session_id` is in every event and nothing read it. Without it there is
   // no "who", and without a who there is no claim and no per-window state.
-  const me = String(ev.session_id || process.env.CLAUDE_SESSION_ID || '').slice(0, 12) ||
-    (cli ? 'cli' : '');
+  const me = String(ev.session_id || process.env.CLAUDE_CODE_SESSION_ID ||
+    process.env.CLAUDE_SESSION_ID || '').slice(0, 12) || (cli ? 'cli' : '');
 
   let text;
   try { text = fs.readFileSync(TODO, 'utf8'); } catch (e) {
@@ -466,8 +522,28 @@ function main() {
         const tmp = `${TODO}.${process.pid}`;
         fs.writeFileSync(tmp, next); fs.renameSync(tmp, TODO);
       }
-      const c = liveClaims(); delete c[String(id)]; writeClaims(c);
-      return cli === 'done' ? `${id} marked [x] and released` : `${id} released`;
+      const c = liveClaims();
+      // ☠️ ATTRIBUTE THE COMPLETION TO WHOEVER CLAIMED IT, NOT TO WHOEVER TYPED
+      // `done`. Caught by the affinity feature's own first test: `done` runs from
+      // the command line, where the hook's `session_id` is absent, so every
+      // completion was recorded against "cli" and no successor could ever match a
+      // session.
+      //
+      // Two things fixed it, and they answer different questions. `me` now falls
+      // back to $CLAUDE_CODE_SESSION_ID, which IS exported into the Bash
+      // environment - an earlier version of this comment said it was not, which
+      // was wrong and was corrected by running `env`. That answers "who am I".
+      // This line answers "who earned this", which is not the same: the claim
+      // records who took the task, and a task may be closed from a different
+      // window than the one that did it.
+      const owner = (c[String(id)] && c[String(id)].session) || me;
+      delete c[String(id)];
+      const prev = readClaims().__completed || {};
+      if (cli === 'done') prev[String(id)] = { session: owner, at: Date.now() };
+      c.__completed = prev;
+      writeClaims(c);
+      return cli === 'done' ? `${id} marked [x] and released (credited to ${owner})`
+        : `${id} released`;
     });
     console.log(out);
     process.exit(0);
@@ -490,11 +566,14 @@ function main() {
     } else {
       console.log(`${r.ready.length} ready · ${r.blocked.length} blocked · ` +
         `${r.waiting.length} waiting · ${r.human.length} with a person`);
-      for (const t of r.ready) console.log(`  [ ] ${t.id}. ${t.text}`);
+      for (const t of r.ready) console.log(`  [${t._mine ? '★' : ' '}] ${t.id}. ${t.text}` +
+        (t._mine ? '   ← continues work this session finished' : ''));
       for (const t of r.blocked) console.log(`  [⛔] ${t.id}. ${t.text}   ← after ${t._b.open.join(', ')}`);
       for (const t of r.waiting) console.log(`  [~] ${t.id}. ${t.text}${t.until ? `   ← until ${t.until}` : ''}`);
       for (const t of r.human) console.log(`  [@] ${t.id}. ${t.text}`);
       if (r.cycles.length) console.log(`\n☠️ circular after:  ${r.cycles.join('\n                    ')}`);
+      for (const { t, own } of r.refused) console.log(`  [↻] ${t.id}. ${clip(t.text, 55)}` +
+        `   ← first refusal: ${own.session} finished what it continues`);
       for (const { t, cl } of r.held) console.log(`  [»] ${t.id}. ${clip(t.text, 60)}` +
         `   ← claimed by ${cl.session}, ${((Date.now() - cl.at) / 6e4).toFixed(0)} min ago`);
       if (r.expired.length) console.log(`\n☠️ expired until:   ` +
