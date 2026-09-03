@@ -56,11 +56,21 @@ const STATE = path.join(STATE_DIR, 'fp3-queue.json');
 // ready[0] and blocked, and read-only is not coordination.
 //
 // ☠️ AND THE CLAIM DELIBERATELY DOES NOT LIVE IN TODO.md. Writing the claim into
-// the document would make every dispatch a write to the one file both windows
-// share - i.e. it would CREATE the write collision it is meant to prevent, and
-// churn the git history with coordination noise. The queue (what to do) stays in
-// the document and stays human-owned; the claim (who is on it right now) is
-// runtime state and lives beside it.
+// the document would make every dispatch a write to the one file every window
+// shares - i.e. it would CREATE the write collision it is meant to prevent, and
+// churn the git history with coordination noise. The queue is *what to do*; the
+// claim is *who is on it this minute*, and a minute-scale fact does not belong in
+// a document that is reviewed and committed.
+//
+// ☠️ CORRECTED: an earlier version of this comment said the queue "stays
+// human-owned". It does not, and the correction matters because the whole write
+// model hangs off it. Only the GOAL is the person's. Agents edit the queue
+// routinely - adding tasks, changing `after:`, marking things done - and from
+// several windows at once. So a whole-file rewrite of TODO.md is the NORMAL
+// operation, not the exception, and every edit has to go through the same lock
+// and re-read as `done` does. That is what the `add`/`set`/`mark` subcommands are
+// for: an agent that edits this file with a text editor instead is racing every
+// other window, and the loser's edit disappears without a sound.
 const CLAIMS = path.join(STATE_DIR, 'fp3-queue-claims.json');
 // A window that dies holding a claim must not park the task for ever.
 const CLAIM_TTL_MIN = 90;
@@ -365,6 +375,80 @@ function main() {
     process.exit(0);
   }
   const r = report(tasks, me);
+
+  // ☠️ EVERY WRITE TO THE QUEUE GOES THROUGH HERE, not only `done`. Agents add
+  // tasks, change `after:` and close items, from several windows at once; an
+  // agent that opens TODO.md in an editor and writes it back whole is racing
+  // every other window, and the loser's edit vanishes silently. These take the
+  // lock, RE-READ inside it, change the minimum, and rename atomically.
+  const EDIT = { add: 1, set: 1, mark: 1 };
+  if (EDIT[cli]) {
+    const out = withLock(() => {
+      const cur = fs.readFileSync(TODO, 'utf8');
+      const b = cur.indexOf(BEGIN), e = cur.indexOf(END);
+      if (b < 0 || e < 0) return `no queue section in ${TODO}`;
+      const head = cur.slice(0, b + BEGIN.length), body = cur.slice(b + BEGIN.length, e),
+        tail = cur.slice(e);
+      let next = body;
+
+      if (cli === 'add') {
+        const argv = process.argv.slice(3);
+        const sep = argv.indexOf('--');
+        const text = (sep < 0 ? argv : argv.slice(0, sep)).join(' ').trim();
+        if (!text) return 'usage: add "<text>" [-- key: value ...]';
+        // ☠️ THE ID IS ALLOCATED INSIDE THE LOCK. Two windows adding at the same
+        // moment would otherwise both read the same maximum and both write it,
+        // and two tasks with one number breaks every `after:` that names it.
+        const ids = [...cur.matchAll(/^\s*-\s*\[[ x~@]\]\s*(\d+)\./gm)].map((m) => Number(m[1]));
+        const id = (ids.length ? Math.max(...ids) : 0) + 1;
+        const keys = sep < 0 ? [] : argv.slice(sep + 1).join(' ')
+          .split(/\s*;\s*/).filter(Boolean).map((k) => `      ${k.trim()}`);
+        next = body.replace(/\n*$/, '\n') + `- [ ] ${id}. ${text}\n` +
+          (keys.length ? keys.join('\n') + '\n' : '');
+        var added = id;
+      } else {
+        const id = Number(process.argv[3]);
+        if (!id) return `usage: ${cli} <id> …`;
+        const line = new RegExp(`^\\s*-\\s*\\[([ x~@])\\]\\s*${id}\\.`, 'm');
+        if (!line.test(body)) return `no task ${id} in the queue`;
+        if (cli === 'mark') {
+          const m = process.argv[4];
+          if (!/^[ x~@]$/.test(m || '')) return "usage: mark <id> ' '|x|~|@";
+          next = body.replace(line, (s0) => s0.replace(/\[[ x~@]\]/, `[${m}]`));
+        } else {
+          const key = process.argv[4], val = process.argv.slice(5).join(' ').trim();
+          if (!KEYS.includes(key)) return `usage: set <id> <${KEYS.join('|')}> <value>`;
+          const at = body.search(line);
+          const after = body.slice(at);
+          const endOfTask = after.slice(1).search(/\n\s*-\s*\[[ x~@]\]|\n\S/);
+          const blockEnd = endOfTask < 0 ? body.length : at + 1 + endOfTask;
+          let blk = body.slice(at, blockEnd);
+          const kre = new RegExp(`^\\s+${key}:.*$`, 'm');
+          blk = kre.test(blk)
+            ? (val ? blk.replace(kre, `      ${key}: ${val}`) : blk.replace(kre + '\n', ''))
+            : (val ? blk.replace(/\n?$/, `\n      ${key}: ${val}`) : blk);
+          next = body.slice(0, at) + blk + body.slice(blockEnd);
+        }
+      }
+
+      // ☠️ VALIDATE BEFORE COMMITTING THE WRITE. A malformed edit would not throw;
+      // it would silently drop tasks from the parse, and the next dispatch would
+      // hand out the wrong one.
+      const check = parse(head + next + tail);
+      if (check.err) return `refusing to write: ${check.err}`;
+      const before = parse(cur).tasks.length;
+      const afterN = check.tasks.length;
+      if (cli !== 'add' && afterN !== before) {
+        return `refusing to write: task count would change ${before} → ${afterN}`;
+      }
+      const tmp = `${TODO}.${process.pid}`;
+      fs.writeFileSync(tmp, head + next + tail);
+      fs.renameSync(tmp, TODO);
+      return cli === 'add' ? `added ${added}` : `${process.argv[3]} updated`;
+    });
+    console.log(out);
+    process.exit(/refusing|usage|no task|no queue/.test(out) ? 1 : 0);
+  }
 
   // ☠️ MARKING A TASK DONE IS A READ-MODIFY-WRITE ON A SHARED FILE, so it happens
   // under the lock and touches ONE line. The alternative - rewriting TODO.md whole
