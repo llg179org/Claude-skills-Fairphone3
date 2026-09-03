@@ -70,9 +70,30 @@ to strangers, and two of its fabrications are invisible at a glance.
   from a log line plus made-up hex looks exactly like a real one and resolves to
   nothing. `git rev-parse <short>` is the only source.
 - ☠️ **Never invent a `lore.kernel.org` message-id or any archive URL.** Fetch it,
-  and if the fetch fails, say so. (Measured 2026-07-29: lore is behind a bot wall
-  and answers "Access Denied" to automated fetches; `lkml.iu.edu`'s hypermail
-  mirror served the same thread.)
+  and if the fetch fails, say so. **One endpoint answers, and only with a tool
+  User-Agent** (measured 2026-09-03 as a 3x3 of endpoint x UA):
+
+  ```sh
+  curl -sL -o /dev/null -w '%{http_code}\n' "https://lore.kernel.org/all/<msgid>/t.mbox.gz"  # 200 real, 404 invented
+  curl -sL "https://lore.kernel.org/all/<msgid>/t.mbox.gz" | zcat | grep -m1 '^Subject:'     # ties the id to its thread
+  b4 mbox -o <dir> '<msgid>'        # same control; ☠️ exit code is 0 either way, test the output
+  ```
+
+  `/all/<msgid>/`, `/raw`, `/t.atom` and `?q=` are gated by Anubis: **403 for a
+  real id and an invented one alike**, so their status carries no information
+  about the id. There is **no REST/JSON API** — public-inbox never had one; the
+  git transport (`git ls-remote https://lore.kernel.org/<list>/0`) is ungated and
+  is the route for bulk work, and patchwork's API is the JSON one.
+
+  ☠️ **Do not answer a bot-wall 403 by faking a browser User-Agent.** Anubis
+  challenges browser-looking UAs and waves tool UAs through, so `Mozilla/5.0`
+  turns every one of those endpoints into a 200 — including `t.mbox.gz` for
+  `BOGUS-control@example.invalid`. The realistic UA is the one that converts a
+  working verifier into one that says yes to everything. More generally:
+  **re-run the negative control after any change to how a check is made**, because
+  the first control here was correct and still produced the wrong conclusion —
+  it had been run against a gated endpoint, and was never re-run once the
+  endpoint changed.
 - ☠️☠️ **The third fabrication is the one that reads best: an observation the
   argument wants.** A draft reply to a maintainer contained *"a real bus read of
   `SYSST`, taken with the cache bypassed, shows the lock bit set at a point where
