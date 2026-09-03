@@ -44,6 +44,13 @@ const gl = (fn, ...a) => { try { return gatelog ? gatelog[fn](...a) : ''; } catc
 
 const TODO = process.env.FP3_QUEUE_FILE ||
   '/mnt/1TB/pmos/fp3-pmaports/docs/TODO.md';
+// ☠️ ARCHIVING WAS AN UNASSIGNED MANUAL STEP. This file's own comment used to say
+// a finished task is "kept only until somebody moves it to TODO-DONE.md" - and
+// nobody was somebody. A queue that only ever grows stops being readable, which
+// is the complaint that produced the whole redesign.
+const DONE_FILE = process.env.FP3_DONE_FILE ||
+  path.join(path.dirname(TODO), 'TODO-DONE.md');
+const DONE_HEAD = '# Closed from the queue';
 const BEGIN = '<!-- FP3-QUEUE:BEGIN -->';
 const END = '<!-- FP3-QUEUE:END -->';
 const STATE_DIR = process.env.CLAUDE_STATE_DIR ||
@@ -167,7 +174,7 @@ function completions() {
 //   [ ]  ready — may be handed out
 //   [~]  waiting on something outside the session (a measurement, a timer)
 //   [@]  needs a person; never handed to the agent
-//   [x]  done — kept only until somebody moves it to TODO-DONE.md
+//   [x]  done — set by hand; `done <id>` moves the task out instead
 //
 // ☠️ THE KEYS ARE FEW ON PURPOSE. Every key here replaces prose that used to say
 // the same thing worse: `after:` replaces "PARKOL, a 116. mögé", `until:`
@@ -517,10 +524,55 @@ function main() {
       const cur = fs.readFileSync(TODO, 'utf8');
       const re = new RegExp(`^(\\s*-\\s*\\[)[ x~@](\\]\\s*${id}\\.)`, 'm');
       if (!re.test(cur)) return `no task ${id} in the queue`;
-      const next = cli === 'done' ? cur.replace(re, '$1x$2') : cur;
       if (cli === 'done') {
+        // Cut the whole task block - the checkbox line and its indented keys.
+        const b = cur.indexOf(BEGIN), e = cur.indexOf(END);
+        const body = cur.slice(b + BEGIN.length, e);
+        const at = body.search(re);
+        const rest = body.slice(at + 1);
+        const nl = rest.search(/\n\s*-\s*\[[ x~@]\]/);
+        const blockEnd = nl < 0 ? body.length : at + 1 + nl;
+        const block = body.slice(at, blockEnd).replace(/\n*$/, '');
+        const nextBody = (body.slice(0, at) + body.slice(blockEnd)).replace(/^\n+/, '\n');
+        const nextTodo = cur.slice(0, b + BEGIN.length) + nextBody + cur.slice(e);
+
+        const chk = parse(nextTodo);
+        if (chk.err) return `refusing to write: ${chk.err}`;
+        if (chk.tasks.length !== parse(cur).tasks.length - 1) {
+          return `refusing to write: task count would go ` +
+            `${parse(cur).tasks.length} → ${chk.tasks.length}, expected one less`;
+        }
+
+        // ☠️ APPEND FIRST, REMOVE SECOND. Two files cannot be written atomically
+        // together, so the order decides which way a crash fails. Appending first
+        // risks a duplicate entry - visible, and removable by hand. Removing first
+        // risks losing the record entirely. A duplicate beats a loss.
+        let done = '';
+        try { done = fs.readFileSync(DONE_FILE, 'utf8'); } catch { done = ''; }
+        if (!done.includes(DONE_HEAD)) {
+          done = done.replace(/\n*$/, '\n') +
+            `\n---\n\n${DONE_HEAD}\n\n` +
+            'Tasks closed out of the `FP3-QUEUE` section of [`TODO.md`](TODO.md),\n' +
+            'newest last, moved by `queue.cjs done`. The item number is the original\n' +
+            'so that `after:` and `continues:` references still resolve.\n';
+        }
+        // ☠️ THE ARCHIVED ENTRY IS RE-RENDERED, NOT PASTED. Pasting the block
+        // verbatim kept its `- [ ]` marker - a finished task filed as not done -
+        // and nested the whole thing under a date bullet, which is not the shape
+        // the rest of this file uses. Match the file: `- [x] **id.** text`, keys
+        // indented under it, and the closing date on the same line.
+        const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
+        const lines = block.trim().split('\n');
+        const head0 = lines[0].replace(/^\s*-\s*\[[ x~@]\]\s*(\d+)\.\s*/, '');
+        const keys = lines.slice(1).map((l) => `      ${l.trim()}`);
+        done = done.replace(/\n*$/, '\n') +
+          `\n- [x] **${id}.** ${head0}  — closed ${stamp}\n` +
+          (keys.length ? keys.join('\n') + '\n' : '');
+        const dtmp = `${DONE_FILE}.${process.pid}`;
+        fs.writeFileSync(dtmp, done); fs.renameSync(dtmp, DONE_FILE);
+
         const tmp = `${TODO}.${process.pid}`;
-        fs.writeFileSync(tmp, next); fs.renameSync(tmp, TODO);
+        fs.writeFileSync(tmp, nextTodo); fs.renameSync(tmp, TODO);
       }
       const c = liveClaims();
       // ☠️ ATTRIBUTE THE COMPLETION TO WHOEVER CLAIMED IT, NOT TO WHOEVER TYPED
@@ -542,7 +594,8 @@ function main() {
       if (cli === 'done') prev[String(id)] = { session: owner, at: Date.now() };
       c.__completed = prev;
       writeClaims(c);
-      return cli === 'done' ? `${id} marked [x] and released (credited to ${owner})`
+      return cli === 'done'
+        ? `${id} archived to ${path.basename(DONE_FILE)} and released (credited to ${owner})`
         : `${id} released`;
     });
     console.log(out);
