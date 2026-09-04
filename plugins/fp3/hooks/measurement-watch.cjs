@@ -136,7 +136,23 @@ process.stdin.on('end', () => {
     // stopped the gate warning about runs that were still going. That is a false
     // negative in the one direction this hook exists to prevent.
     const FINISHED = /\b(inactive|failed|dead|not-found|could not be found)\b/;
-    if (FINISHED.test(resp)) {
+    // ☠️ 2026-09-04: 3b still leaked four finished runs, and the reason is that a
+    // watcher started with run_in_background NEVER surfaces its polling output
+    // through tool_response - it goes to a task file. The only evidence that
+    // does reach this hook is the later `cat` of that file, whose COMMAND names
+    // no unit at all, and whose text ends runs in systemd's own wording
+    // ("<unit>.service: Deactivated successfully.") or the watcher's own
+    // ("=== <unit> finished HH:MM:SS ==="). Neither word was in the vocabulary,
+    // so the per-line branch scanned right past them.
+    //
+    // Widen the vocabulary ONLY for the per-line branch, where the unit name has
+    // to appear on the same line as the token. It must not widen the
+    // single-unit branch: there the whole response is believed, and a journal
+    // dump full of "Finished <some other unit's description>" would close a run
+    // that is still going - a false negative in the one direction this hook
+    // exists to prevent.
+    const FINISHED_LINE = /\b(inactive|failed|dead|not-found|could not be found|finished)\b|Deactivated successfully/i;
+    if (FINISHED.test(resp) || FINISHED_LINE.test(resp)) {
       const named = Object.keys(state).filter((u) => !state[u].done && cmd.includes(u));
       if (named.length === 1) {
         // the command asked about exactly one run, so the state in the reply is its
@@ -144,7 +160,7 @@ process.stdin.on('end', () => {
       } else {
         // otherwise only believe a line that carries the unit name AND the state
         for (const line of resp.split('\n')) {
-          if (!FINISHED.test(line)) continue;
+          if (!FINISHED_LINE.test(line)) continue;
           for (const u of Object.keys(state)) if (!state[u].done && line.includes(u)) state[u].done = true;
         }
       }
