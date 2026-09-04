@@ -90,8 +90,18 @@ process.stdin.on('end', () => {
     }
 
     // 3. a measurement being stopped or superseded
-    for (const m of cmd.matchAll(/systemctl\s+stop\s+([A-Za-z0-9_.@-]+)/g)) {
-      const unit = m[1];
+    // ☠️ The pattern used to be /systemctl\s+stop\s+/, which does not match
+    // `systemctl --user stop X` — any flag between the verb and the noun made the
+    // stop invisible, so the unit stayed "running" forever and the Stop gate
+    // nagged about a measurement that had ended. Measured 2026-09-04: a stopped
+    // `fp3-tone-test` was still being reported as unattended half an hour later,
+    // while the device had no such unit. Flags are now skipped, and every unit
+    // named on the line is taken, not just the first.
+    const stops = [];
+    for (const m of cmd.matchAll(/systemctl\s+(?:--?[A-Za-z0-9=-]+\s+)*(?:stop|kill|reset-failed)\s+([A-Za-z0-9_.@ -]+)/g)) {
+      for (const w of m[1].split(/\s+/)) if (w) stops.push(w.replace(/\.service$/, ''));
+    }
+    for (const unit of stops) {
       if (state[unit]) {
         if (state[unit].watcher && !state[unit].warnedStale) {
           state[unit].warnedStale = true;
@@ -102,6 +112,41 @@ process.stdin.on('end', () => {
           );
         }
         state[unit].done = true;
+      }
+    }
+
+    // 3b. ☠️ A unit that FINISHES BY ITSELF is never stopped by anyone, so rule 3
+    // can never see it. With `--collect` the unit is removed the moment it exits,
+    // and nothing on the host learns. Until 2026-09-04 the only thing that ever
+    // cleared such an entry was the six-hour age prune, so five finished runs
+    // were still listed as "measurement running on the phone" and one of them was
+    // quoted back to the user as a reason not to end the turn.
+    //
+    // The evidence is already flowing past this hook: every watcher polls
+    // `systemctl show -p ActiveState --value <unit>`, and the RESULT of that call
+    // is in tool_response. If a tracked unit is named in the command and its
+    // output reports a definite finished state, the run is over.
+    const resp = typeof ev.tool_response === 'string'
+      ? ev.tool_response
+      : JSON.stringify(ev.tool_response ?? '');
+    // ☠️ Attribute the finished state to the RIGHT unit. A first cut marked every
+    // tracked unit named anywhere in the command done as soon as the word
+    // "inactive" appeared anywhere in the output - so one poll listing several
+    // units, of which one had ended, would have silently cleared the others and
+    // stopped the gate warning about runs that were still going. That is a false
+    // negative in the one direction this hook exists to prevent.
+    const FINISHED = /\b(inactive|failed|dead|not-found|could not be found)\b/;
+    if (FINISHED.test(resp)) {
+      const named = Object.keys(state).filter((u) => !state[u].done && cmd.includes(u));
+      if (named.length === 1) {
+        // the command asked about exactly one run, so the state in the reply is its
+        state[named[0]].done = true;
+      } else {
+        // otherwise only believe a line that carries the unit name AND the state
+        for (const line of resp.split('\n')) {
+          if (!FINISHED.test(line)) continue;
+          for (const u of Object.keys(state)) if (!state[u].done && line.includes(u)) state[u].done = true;
+        }
       }
     }
 
