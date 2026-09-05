@@ -910,7 +910,15 @@ function main() {
   // ☠️ ASK ABOUT THE LAST ONE BEFORE LOGGING THIS ONE, or the question is about
   // the firing that is happening right now, which nobody can answer yet.
   const ask = gl('askLine', 'queue');
-  gl('log', 'queue', `task ${r.ready[0].id}`);
+  // ☠️ A CONTINUATION IS NOT A DECISION, SO IT DOES NOT GO IN THE GATE LOG.
+  // Handing a window back its own claimed task (see _claimed_here) says only
+  // "still on it". Logging that made every turn boundary during a long build
+  // cost a catch/false/override verdict of its own, which is bookkeeping rather
+  // than signal - measured 2026-09-05, four such firings during one kernel
+  // build. The firing that ASSIGNED the task is still logged, so no actual
+  // dispatch decision is lost. Same principle as results-guard: a gate that
+  // gated nothing new must not ask to be judged.
+  if (r.ready[0]._claimed_here == null) gl('log', 'queue', `task ${r.ready[0].id}`);
   process.stdout.write(JSON.stringify({
     decision: 'block',
     systemMessage: t('queue.next', { id: r.ready[0].id != null ? `${r.ready[0].id}. ` : '',
