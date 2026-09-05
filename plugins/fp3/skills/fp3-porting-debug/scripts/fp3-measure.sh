@@ -43,7 +43,11 @@ cmd=${1:-}; shift 2>/dev/null || true
 
 case "$cmd" in
 status)
-    out=$(remote "cat $LOCK 2>/dev/null" 2>/dev/null) || {
+    # ☠️ `|| true` runs ON THE DEVICE. Without it a missing lock file - the free
+    # state, i.e. the common case - makes cat exit non-zero, the wrapper returns
+    # that, and this reported "cannot reach the device" about a phone answering
+    # fine. A status tool that calls healthy "unreachable" is worse than none.
+    out=$(remote "cat $LOCK 2>/dev/null || true" 2>/dev/null) || {
         echo "fp3-measure: cannot reach the device to read the lock" >&2; exit 3; }
     if [ -z "$out" ]; then echo "free"; exit 0; fi
     IFS='|' read -r who what started expires <<<"$out"
