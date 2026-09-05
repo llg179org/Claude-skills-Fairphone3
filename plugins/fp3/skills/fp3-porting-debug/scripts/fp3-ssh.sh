@@ -28,6 +28,15 @@ for _d in "$(dirname "$_self")" "$(dirname "$_self")/.." "$(dirname "$_self")/..
 done
 
 set -u
+
+# ☠️ THE MEASUREMENT LOCK (fp3-measure). A run that is measuring how long this
+# phone sleeps is ruined by a login into it; the 2026-09-02 replication night was
+# lost exactly that way. The lock lives ON THE DEVICE so every host and every
+# manual call sees the same one, and it is checked in the SAME connection this
+# call was going to make anyway, so it costs no extra login. It FAILS OPEN: if
+# the check cannot run, the command proceeds.
+MEASURE_GUARD='L="$HOME/.fp3-measure.lock"; if [ -r "$L" ]; then e=$(cut -d"|" -f4 "$L" 2>/dev/null); case "$e" in ""|*[!0-9]*) e=0;; esac; if [ "$e" -gt "$(date +%s)" ]; then echo "REFUSED by fp3-measure: $(cat "$L")" >&2; echo "  override with FP3_MEASURE_BYPASS=1, or wait, or: fp3-measure free" >&2; exit 98; fi; fi;'
+[ "${FP3_MEASURE_BYPASS:-}" = 1 ] && MEASURE_GUARD=''
 IP=$FP3_DEV_IP; USER=$FP3_USER; PW="$FP3_PW"
 TRIES="${FP3_SSH_TRIES:-12}"
 COMMON="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR
@@ -55,7 +64,7 @@ if [ "$#" -eq 0 ]; then SSH "$USER@$IP"; exit $?; fi
 
 i=1
 while [ "$i" -le "$TRIES" ]; do
-    SSH "$USER@$IP" "$@"
+    SSH "$USER@$IP" "$MEASURE_GUARD" "$@"
     rc=$?
     [ "$rc" -eq 0 ] && exit 0
     # 255 is ssh's own transport failure; anything else came from the remote

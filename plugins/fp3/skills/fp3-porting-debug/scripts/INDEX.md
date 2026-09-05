@@ -185,3 +185,36 @@ They are grouped in threes (build → deploy → read) named after the experimen
 so `build_snapCKB8_patch.py` / `deploy_snapCKB8_*.sh` / `smem_snapCKB8_read.py`
 belong together. The journal entries referenced in `../references/` explain
 what each one was testing.
+
+## `fp3-measure.sh` — the single entry point for anything that measures the phone
+
+```
+fp3-measure run  <name> <minutes> -- <command…>   acquire, run, release
+fp3-measure hold <name> <minutes>                 acquire and return
+fp3-measure free                                  release
+fp3-measure status                                who holds it, and until when
+```
+
+☠️ **The lock is on the DEVICE, not on this machine, and that is the whole point.**
+The 2026-09-02 replication night was destroyed by a host-side watcher ssh'ing in
+every 300 s — fifteen logins inside a 75-minute leg of a run measuring how long the
+AP stays asleep. Three defences existed that morning and every one would have
+fired; none did, because they all lived inside one Claude session and the watcher
+lived outside it. A lock under `~/.claude`, or anywhere on one host, cannot close
+that. The only thing every disturber shares is the phone.
+
+`fp3-ssh` and `ut-ssh` check the lock **in the same connection they were going to
+make anyway**, so the check costs no extra login, and they **fail open**: if the
+check cannot run, the command proceeds. A held lock refuses with **exit 98** and
+names who holds it, for what, and for how much longer. `FP3_MEASURE_BYPASS=1`
+overrides.
+
+☠️ Two things it deliberately does not do. It is **not a guarantee** — a raw `ssh`
+that bypasses the wrappers is not stopped by anything here; it closes the paths
+people actually use. And a lock **expires**, so a crashed run cannot block the
+phone forever; `status` reports a stale lock as stale rather than as held.
+
+☠️ The lock lives in the device's **home directory**, not `/var/lock` or `/run`:
+`/var/lock` is on a read-only rootfs under Ubuntu Touch (measured 2026-09-05, the
+first design failed there), and `/run` is wiped by the reboots a multi-boot run
+makes between its legs.

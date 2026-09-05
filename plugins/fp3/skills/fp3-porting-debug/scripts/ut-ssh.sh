@@ -26,6 +26,15 @@ for _d in "$(dirname "$_self")" "$(dirname "$_self")/.." "$(dirname "$_self")/..
 done
 
 set -u
+
+# ☠️ THE MEASUREMENT LOCK (fp3-measure). A run that is measuring how long this
+# phone sleeps is ruined by a login into it; the 2026-09-02 replication night was
+# lost exactly that way. The lock lives ON THE DEVICE so every host and every
+# manual call sees the same one, and it is checked in the SAME connection this
+# call was going to make anyway, so it costs no extra login. It FAILS OPEN: if
+# the check cannot run, the command proceeds.
+MEASURE_GUARD='L="$HOME/.fp3-measure.lock"; if [ -r "$L" ]; then e=$(cut -d"|" -f4 "$L" 2>/dev/null); case "$e" in ""|*[!0-9]*) e=0;; esac; if [ "$e" -gt "$(date +%s)" ]; then echo "REFUSED by fp3-measure: $(cat "$L")" >&2; echo "  override with FP3_MEASURE_BYPASS=1, or wait, or: fp3-measure free" >&2; exit 98; fi; fi;'
+[ "${FP3_MEASURE_BYPASS:-}" = 1 ] && MEASURE_GUARD=''
 TRIES="${UT_SSH_TRIES:-12}"
 OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR
       -o ConnectTimeout=8 -o ServerAliveInterval=15 -o IdentitiesOnly=yes -i $FP3_SSH_KEY"
@@ -44,7 +53,7 @@ while [ "$i" -le "$TRIES" ]; do
             ssh $OPTS -p "$port" "$dest" && exit 0
             continue
         fi
-        ssh $OPTS -p "$port" "$dest" "$@"
+        ssh $OPTS -p "$port" "$dest" "$MEASURE_GUARD" "$@"
         rc=$?
         [ "$rc" -eq 0 ] && exit 0
         # 255 is ssh's own transport failure; any other status came from the
