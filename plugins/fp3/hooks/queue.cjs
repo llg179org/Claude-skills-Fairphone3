@@ -93,6 +93,9 @@ const CLAIM_TTL_MIN = 90;
 // verbatim in spirit: at most MAX_NUDGE consecutive blocks for one unchanged
 // queue, then it lets the turn end and says why.
 const MAX_NUDGE = 3;
+// ☠️ How long a continuation firing stays quiet after it has fired once. See the
+// block that uses it, below `if (!r.ready.length)`.
+const CONTINUATION_QUIET_MIN = 20;
 
 const readState = () => {
   try { return JSON.parse(fs.readFileSync(STATE, 'utf8')); } catch { return {}; }
@@ -871,6 +874,30 @@ function main() {
       hookSpecificOutput: { hookEventName: 'Stop', additionalContext: idleText(r, tasks) },
     }));
     process.exit(0);
+  }
+
+  // ☠️ A CONTINUATION MUST NOT FIRE ON EVERY TURN BOUNDARY. Handing a window back
+  // its own claimed task says only "still on it", and the honest answer to it is
+  // a sentence naming what is running - so firing again one turn later demands
+  // that same sentence while the thing it names (a 25-minute kernel build) has
+  // not moved. Measured 2026-09-05: two consecutive continuation firings 0 min
+  // apart during one build, the second carrying no information in either
+  // direction, and the answer to both was necessarily the same paragraph.
+  //
+  // MAX_NUDGE does not cover this: its counter is keyed on the queue's CONTENT,
+  // which by definition does not change while one window works one task, so it
+  // reaches its budget once and then never again for the rest of the task.
+  //
+  // The firing that ASSIGNS a task is untouched - only the repeat of a
+  // continuation is quieted, and only for the same task id.
+  if (r.ready[0]._claimed_here != null) {
+    const id = String(r.ready[0].id);
+    const last = (st.cont || {})[id];
+    if (last && Date.now() - last < CONTINUATION_QUIET_MIN * 60000) {
+      writeState(all);
+      process.exit(0);                 // still on it, and it said so recently
+    }
+    (st.cont || (st.cont = {}))[id] = Date.now();
   }
 
   st.nudges = (st.nudges || 0) + 1;
