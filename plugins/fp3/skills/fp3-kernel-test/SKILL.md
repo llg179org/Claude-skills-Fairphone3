@@ -100,6 +100,24 @@ A check whose command is not shown is an assertion. The checks in
 `fp3-pmaports/tests/checks/` follow this in their own failure output — a `cmd:`
 line next to the verdict — for exactly this reason.
 
+**3a. ☠️ NEVER PUT A STATUS TEST BEHIND A PIPE.** `cmd | tail`, `cmd | awk`,
+`cmd | head` report the **last** command's exit status, not `cmd`'s, so `&&` and
+`||` after them branch on the wrong thing. This is not a subtlety; it fired three
+times in one day, each time reading as success:
+
+| what was run | what it hid |
+|---|---|
+| `./pmb build … pkgA pkgB \| tail -60` | one package failed on a missing checksum; the harness recorded **exit 0** |
+| `git fetch origin <sha> \| tail -2 && echo "reachable" \|\| echo "gone"` | the fetch failed, `tail` succeeded, so the **opposite** conclusion was printed |
+| `ls <artifact> \| awk '…' \|\| echo "still building"` | `ls` failed, `awk` succeeded, so **neither** branch ran and the check produced nothing at all |
+
+The third shape is the dangerous one: a test that reports *nothing* is easier to
+skim past than one that reports the wrong thing. Redirect to a file and read
+`$?`, or use `[ -f … ]`/`test` directly. `pipefail` is not in `sh`, and
+`${PIPESTATUS[0]}` is not a habit that survives a long session — the evidence is
+that it did not survive the one where the first instance had already been written
+up.
+
 **4. No command exists for a check → write one, don't do it by hand.** A hand-run
 check is unrepeatable, unreviewable and gone by the next session. Look first for
 the command that already exists (`fp3-selftest --only <fragment>` runs any subset
@@ -110,6 +128,27 @@ worse than nothing. If there genuinely is none, the check belongs in
 host-side procedure. Either way, prove it against a **known positive**: a
 checking tool that reports "clean" has proved nothing until it has been shown
 failing on a case you know is broken.
+
+☠️ **"Look first" is the half that gets skipped, and it costs twice.** A tool to
+write one of the modem's settings was written from scratch on the stated grounds
+that no CLI exposed the message. The CLI gap was real; the **capability** was
+not missing — a reconciler doing exactly that write had been in the repository,
+installed on the phone and covered by its own selftest for three days. The
+duplicate was the smaller cost. The larger one was that the existing tool had a
+**timer re-asserting the opposite setting every five minutes**, so it reverted
+the write inside the observation window and two minutes of "the state does not
+change" measured the reconciler rather than the device.
+
+Two habits follow:
+
+- **Before writing a tool, grep the repository for what it would do**, by the
+  field or the setting name — not by the topic. The existing thing is rarely
+  named after the problem you have.
+- ☠️ **Before measuring a state, ask what is holding it.** A boot-time unit, a
+  timer, a udev rule or a daemon may be re-asserting the value you are about to
+  change, and it will do so silently and on its own schedule. Stop it for the
+  duration and put it back — and if the observation window is shorter than its
+  period, you will not even see it happen.
 
 **4a. A capture you commit carries the device's identity — scrub it before the
 first commit.** The raw `ofono`, `dmesg` and `journalctl` output that makes a
@@ -244,6 +283,19 @@ reset: it clears the "unbootable"/retry state on a slot you just broke.
 - Build system is pmbootstrap via a wrapper (`cd $FP3_PMOS && ./pmb …`).
   A `--src` build stamps an apk version `_pYYYYMMDDHHMMSS`; a plain upstream
   version string means your DT/source edits are **not** in the image.
+- ☠️☠️ **AND THE RETRY ACCUMULATES COPIES, WHICH RACE YOUR CLEANUP.** The rule
+  below says keep remote commands idempotent. What it does not say is what
+  happens when you ignore that with a **state-mutating** script: the wrapper
+  keeps respawning it, so while you are killing one copy another has already
+  started, and every restore you perform is undone within the minute by a copy
+  launched after it. Measured: a script that stopped a systemd timer and wrote a
+  modem setting was respawned repeatedly, and two rounds of "kill it and put the
+  state back" both looked successful and were both reverted. A `trap … EXIT`
+  restore is **not** protection here — each new copy re-breaks what its
+  predecessor put back. The order that works is: **stop the background task
+  first**, then kill survivors **by PID**, then delete the script from the device
+  so a late retry has nothing to run. And raising `FP3_SSH_TRIES` multiplies the
+  blast radius, so raise it only for something safe to run several times.
 - ☠️ **The ssh wrapper retries the WHOLE command, so a multi-step script can run
   several times.** `fp3-ssh 'long; multi; step; script'` re-invokes the entire string
   when the link is mid-reconnect — a thermal ramp measured this way silently ran three
@@ -287,7 +339,8 @@ cost a device, a boot, or a wrong conclusion at least once.
 5. Never read an unverified physical address from the AP; exfil via SMEM, not the carveout.
 6. `dd`/`devmem` lie on hardened kernels — use Python `mmap`; same constant every word = suspended block.
 7. Never force an unclean reboot on a healthy system — the next boot's fsck hangs.
-8. Verify `uname -v` shows the new build before believing a flash; chunked `-S 256M` sparse flash.
+8. ☠️ `uname -v` alone does **not** verify a flash — it describes the **booted image**, while the package marker (`/usr/share/kernel/<flavor>/fp3-commit`) describes the **installed rootfs package**, and the two are placed by different steps and can disagree. Measured: a phone treated for a week as running one release was booting a kernel from a second and carrying a third's package. Ask all three — build stamp, installed package, source commit — which `fp3-selftest --only identity` does in one go. And note the arithmetic: this APKBUILD passes `KBUILD_BUILD_VERSION=$((pkgrel+1))`, so `#N` is never the package release. Chunked `-S 256M` sparse flash.
+8a. ☠️ **Verify the SHIPPED ARTIFACT, not the intention.** A config option you set is a request; `olddefconfig` may drop it for an unmet dependency and the build still succeeds. Read it back out of the built package — the config it ships and the modules it contains — *before* the flash, and out of the running system after. Three reads, each cheap, and the first two catch a wasted flash.
 9. A cold-boot deploy campaign fills the ~2.4 GB rootfs → reboot loop; gate on `df` **and** a clean fs.
 10. A single "no-boot → fastboot" is usually a transient retry-fallback; `set_active` + retry once.
 11. A firmware cave on a frequently-called function stalls the co-processor SSR — estimate call frequency first.
@@ -966,6 +1019,30 @@ shutdown` + umount-loop before `pmb install`; `ssh-keygen -R <ip>` (or
 regen changes the host key. `pmb build` alone (~8 min) fits one foreground call.
 
 ### Step 4 — Read the result as your pre-declared measurement
+
+☠️ **THE ERROR CHANGED, AND THAT IS THE ANSWER.** A change can succeed
+completely while the command you use to check it still fails — and if the
+pass/fail was written as "does it work", the result gets thrown away. Read the
+*error*, not the exit status:
+
+| | the same command said |
+|---|---|
+| before the change | `Cannot open netlink socket: Protocol not supported` |
+| after, as a normal user | `RTNETLINK answers: Operation not permitted` |
+| after, as root | *(nothing — rc=0)* |
+
+Both of the first two are failures. The first says the kernel does not implement
+the protocol; the second says it does, and refuses the *operation* for want of a
+capability. That difference is the whole finding, and "it still fails" discards
+it. The habit: when a check still fails after a change, **diff the failure
+against the one you started with** before concluding anything — a different
+error is progress, an identical one is not.
+
+The same reading applies upwards. A remote service answering `500` is not the
+same as no answer at all: silence means nothing arrived, a 5xx means it arrived,
+was parsed, and something downstream broke. Those two live at opposite ends of a
+diagnosis.
+
 Compare against the pass/fail you wrote in Step 0. Express both as concrete
 signals so the answer is unambiguous. ☠️ **A state the hardware only passes
 through cannot be sampled — track the transition instead.** If a periodic poll

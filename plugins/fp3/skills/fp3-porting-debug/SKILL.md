@@ -901,10 +901,44 @@ The policy for what is masked and what deliberately is not — the USB gadget's
 link-local addresses stay, vendor version strings that look like addresses stay —
 plus the check that enforces it, live in the project:
 [`fp3-pmaports/docs/PRIVACY.md`](https://github.com/llg179org/fp3-pmaports/blob/main/docs/PRIVACY.md)
-and `fp3-pmaports/tests/no-identifiers.sh` (`--self-test` proves it still bites).
+and `fp3-pmaports/tests/no-identifiers.sh` (`--self-test` is what proves it still
+bites).
 ☠️ That policy page existed, and said the right thing, while it was being broken
 in every capture committed after it — which is why the enforcement is a script and
 not a paragraph.
+
+☠️☠️ **AND THE SELF-TEST ITSELF HAD NEVER PASSED.** The sentence above used to
+read "`--self-test` proves it still bites", stated as a settled property. It was
+not: the test planted the **redaction marker** `<imei>` and expected the scanner
+to catch it, which cannot happen, so it failed on its first assertion every time
+anyone ran it — while the plain scan was being relied on before every capture
+commit and reporting clean. The scan was in fact fine. The thing that vouched for
+it was broken, and nobody had looked, because a guard that says "clean" is
+exactly the thing nobody looks at.
+
+Two rules come out of that, and they generalise past this script:
+
+- **A self-test must plant a value that looks real.** Assemble it from parts so
+  the checker's own file never contains a plausible identifier — `35` plus zeros
+  is IMEI-shaped and belongs to no device — but it must be something the pattern
+  can actually match, or the test proves the opposite of what it claims.
+- **"The checker says clean" is a statement about its patterns, not about the
+  tree.** Every time a new *kind* of identifier appears in a capture, the guard
+  has to be told about it, and until it is, its silence means nothing.
+
+Two kinds it did not know about until they bit:
+
+- ☠️ **The hyphenated IMEI.** SIP carries it as
+  `+sip.instance="<urn:gsma:imei:35xxxxxx-xxxxxx-x>"`, and a pattern for a bare
+  15-digit run cannot match it — the hyphens break both the word boundary and the
+  digit run. The guard reported clean on a file containing it.
+- ☠️ **The device password, via a process listing.** Any helper that gets root as
+  `echo <pw> | sudo -S …` puts the password in the command line of every
+  privileged process, so a capture that includes `ps -o args`, `ps aux` or
+  `pgrep -a` carries it in clear. Match the *shape* — a quoted literal echoed
+  into `sudo -S` — never the secret itself, and exclude the correct forms
+  (`echo '$pw' | sudo -S`, and the single-quote idiom `echo '"$PW"' | sudo -S`)
+  by requiring the quoted text to contain no `$`.
 
 ### Before spending a window, grep the captures — for the FIELD, not the topic
 
