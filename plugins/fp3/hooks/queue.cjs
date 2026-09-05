@@ -409,6 +409,13 @@ function report(tasks, me, lane) {
       // Mine is still mine: a window re-reading its own claim must get its task
       // back, or a second Stop in the same session would hand it something else.
       if (cl && me && cl.session !== me) { held.push({ t, cl }); continue; }
+      // ☠️ Handing a window its own claim back is deliberate (above), but the
+      // Stop text then reads as a FRESH assignment - "Do this one", followed by
+      // how to close it and how to escape it - for work that is already under
+      // way. Measured 2026-09-05: a 15-minute kernel build in the background
+      // made every turn boundary look like a new order. Mark it so the wording
+      // can say "still on N" instead.
+      if (cl && me && cl.session === me) t._claimed_here = Math.round((Date.now() - cl.at) / 60000);
       // ☠️ THE LANE FILTER COMES BEFORE FIRST REFUSAL: a task in the wrong lane is
       // not "held briefly", it is never this window's.
       if (lane && t.lane && t.lane !== 'any' && t.lane !== lane) { otherLane.push(t); continue; }
@@ -909,7 +916,13 @@ function main() {
     systemMessage: t('queue.next', { id: r.ready[0].id != null ? `${r.ready[0].id}. ` : '',
       text: r.ready[0].text.slice(0, 60) }, ev.cwd),
     reason: ask +
-      `The next task in the queue (${TODO}):\n\n${describe(r.ready[0])}\n\n` +
+      (r.ready[0]._claimed_here != null
+        ? `STILL ON THIS ONE - task ${r.ready[0].id}, claimed by this window ` +
+          `${r.ready[0]._claimed_here} min ago. This is not a new assignment; it is the ` +
+          `work you are already doing, handed back so the session does not drift ` +
+          `off it. If it is finished, close it. If it is still running, say what is ` +
+          `running and carry on.\n\n${describe(r.ready[0])}\n\n`
+        : `The next task in the queue (${TODO}):\n\n${describe(r.ready[0])}\n\n`) +
       // ☠️ SAY THE WHOLE CLOSING PROCEDURE HERE, AND NAME THE COMMAND. Nothing in
       // this system closes a task: the agent does, and it only does what it was
       // told at the moment it mattered. This text used to say "mark it `[x]`
