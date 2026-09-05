@@ -111,6 +111,15 @@ host-side procedure. Either way, prove it against a **known positive**: a
 checking tool that reports "clean" has proved nothing until it has been shown
 failing on a case you know is broken.
 
+**4a. A capture you commit carries the device's identity — scrub it before the
+first commit.** The raw `ofono`, `dmesg` and `journalctl` output that makes a
+capture worth keeping is also what puts the owner's IMEI, IMSI, ICCID, phone
+number and home access-point BSSID into a public repository, and the last of those
+arrives inside a `dmesg` block where nobody looks for it. ☠️ `grep` skips a file
+with a stray NUL byte, so a scan without `-a` can report clean while a number sits
+in the tree. Method, traps and the enforcing script:
+`fp3-porting-debug` → "A capture is a paste from the device".
+
 **5. A NEW instrument produces no reportable number until it has answered a
 question you already know the answer to.** This is a **gate, not advice** — the
 number does not get quoted, written into a capture, or told to the operator

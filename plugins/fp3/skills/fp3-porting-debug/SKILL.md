@@ -856,6 +856,56 @@ Wall-clock throughput, processor time, memory bandwidth and latency are four
 different questions and a pipeline can be flat in one while it doubles in
 another.
 
+### ☠️ A capture is a paste from the device, so it carries the device's identity
+
+Everything that makes a good capture — raw `ofono` property dumps, whole `dmesg`
+blocks, unfiltered `journalctl` — is also what puts the owner's **IMEI, IMSI,
+ICCID, phone number and home access-point BSSID** into a public repository. These
+are not edge cases; they are the normal content of the exact commands this skill
+tells you to run. Scrub before the **first** commit: afterwards the fix is a
+history rewrite, which is a different and much larger decision.
+
+The BSSID is the one that gets missed. It arrives inside a `dmesg` paste
+(`wlan0: authenticate with <bssid> (local address=<mac>)`) where nobody is looking
+for an identifier, and public databases map an access point to a street address —
+so it is a *premises* identifier, not a device one, and it belongs on the
+never-commit list beside the subscriber fields.
+
+Three traps, all of which have fired:
+
+- ☠️ **`grep` silently skips a file it thinks is binary.** Two stray NUL bytes in
+  an `ofono` dump were enough; a scan reported clean while a phone number sat in
+  the tree. Always `grep -a` when scanning for identifiers, and treat a clean
+  result from a scan without it as *no result*.
+- ☠️ **`git-filter-repo --replace-text` skips binary blobs too** — the same blind
+  spot, one layer down, so a rewrite can leave behind precisely the file that
+  hid the value from the first scan. Use `--blob-callback`, which makes no such
+  distinction, and re-scan the rewritten history rather than trusting the tool's
+  success message.
+- ☠️ **Prove the scrubber on a known positive before believing "clean".** Run the
+  same scan against the pre-rewrite backup, where the identifiers are present, and
+  confirm it finds them. A scan only ever seen saying "clean" has proved nothing —
+  the same rule as "write the check, then show it failing" above.
+
+Two consequences worth stating because they invert rules stated elsewhere:
+
+- **Do not tag the old tip before this particular force-push.** The general rule
+  is to tag first so the previous tip stays reachable; here that would keep alive
+  exactly what is being removed. Keep a verified `git bundle` on the owner's own
+  machine, outside every repository, and force-push without a tag.
+- **A rewrite does not make the forge forget.** GitHub can still serve an orphaned
+  commit by its full SHA until it garbage-collects, and forks and caches may keep
+  it. Say so rather than reporting the problem as closed.
+
+The policy for what is masked and what deliberately is not — the USB gadget's
+link-local addresses stay, vendor version strings that look like addresses stay —
+plus the check that enforces it, live in the project:
+[`fp3-pmaports/docs/PRIVACY.md`](https://github.com/llg179org/fp3-pmaports/blob/main/docs/PRIVACY.md)
+and `fp3-pmaports/tests/no-identifiers.sh` (`--self-test` proves it still bites).
+☠️ That policy page existed, and said the right thing, while it was being broken
+in every capture committed after it — which is why the enforcement is a script and
+not a paragraph.
+
 ### Before spending a window, grep the captures — for the FIELD, not the topic
 
 Captures are indexed by date and by the question that prompted them, never by
