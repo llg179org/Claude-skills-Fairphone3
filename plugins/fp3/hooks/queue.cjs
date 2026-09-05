@@ -556,7 +556,17 @@ function main() {
         // ☠️ THE ID IS ALLOCATED INSIDE THE LOCK. Two windows adding at the same
         // moment would otherwise both read the same maximum and both write it,
         // and two tasks with one number breaks every `after:` that names it.
-        const ids = [...cur.matchAll(/^\s*-\s*\[[ x~@]\]\s*(\d+)\./gm)].map((m) => Number(m[1]));
+        // ☠️ AND IT MUST COUNT THE ARCHIVE TOO. Allocating from the live queue
+        // alone means every `done` FREES its number for reuse: measured
+        // 2026-09-05, id 155 had been handed out three times (two entries
+        // already in TODO-DONE.md, one live) and 159 twice, so `after: 155`
+        // named an ambiguous task and the history could not be read back. The
+        // lock above stops two windows colliding with each other; this stops a
+        // window colliding with the past.
+        const idsIn = (t) => [...t.matchAll(/^\s*-\s*\[[ x~@]\]\s*\*?\*?(\d+)\./gm)].map((m) => Number(m[1]));
+        let archived = [];
+        try { archived = idsIn(fs.readFileSync(DONE_FILE, 'utf8')); } catch { /* no archive yet */ }
+        const ids = idsIn(cur).concat(archived);
         const id = (ids.length ? Math.max(...ids) : 0) + 1;
         const keys = sep < 0 ? [] : argv.slice(sep + 1).join(' ')
           .split(/\s*;\s*/).filter(Boolean).map((k) => `      ${k.trim()}`);
