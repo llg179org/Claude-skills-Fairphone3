@@ -142,7 +142,6 @@ directory.
 | `pmos-netcon-trigger.sh` | pmos-netcon-trigger.sh HOST_MAC  — run on pmOS as root. Bring up netconsole over the RNDIS link (device $FP3_DEV_IP -> host |
 | `pmos-rpmsg-diag.py` | pmos-rpmsg-diag.py — read the ADSP's DIAG stream on pmOS via rpmsg_char, and (optionally) push the F3 message mask on the DIAG_CNTL channel so the ADS… |
 | `adsp-smem-log.py` | adsp-smem-log.py — read Qualcomm SMEM_LOG ring from the AP on mainline pmOS. |
-| `ims-enable.py` | Turn the modem's IMS voice-over-LTE switch on or off, and read it back. Sends QMI IMS `0x008f` (*Set IMS Services Enabled Setting*) through libqmi's GObject introspection, because **no `qmicli` exposes a CLI option for it** — checked in 1.39.0 and 1.39.1, though libqmi has defined the message since 1.38 and the installed library exports the API. Runs on the device (`show`/`on`/`off`); always prints the setting before and after, so a change is never inferred. ☠️ Opens the device with `PROXY`: without qmi-proxy every IMS query answers `InvalidOperation`, which reads like a modem with no IMS at all. |
 | `qrtr_lookup.py` | Minimal qrtr-lookup replacement: enumerate QRTR services via kernel name service. |
 | `ut-diag-adsp.py` | ut-diag-adsp.py  — on-device (UT) ADSP/LPASS diag F3 capture via /dev/diag Pure python, no compilation. Constants verified against downstream source: |
 | `ut_diag_f3.py` | UT (downstream 4.9 diagchar) ADSP F3 capture via /dev/diag. Unlike mainline rpmsg, UT uses the classic Qualcomm diagchar node: |
