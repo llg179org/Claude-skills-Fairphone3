@@ -149,6 +149,21 @@ that afternoon which *was* gated first (an awake control window for a new
 suspend-current fit, run in a regime with four prior readings) worked on its
 first attempt and, just as importantly, said what resolution it did **not** have.
 
+☠️ **A constant passes an agreement check perfectly — so the gate must include a
+regime where the value is expected to DIFFER.** Measured 2026-09-05: a sampler
+gained two columns mid-session, was gated once against an idle regime where they
+read `true`/`true`, and one of them was then quoted in four write-ups as evidence
+about the network. Reading the source of the plugin that supplied it showed the
+value is set unconditionally at interface init — `true` on every device that loads
+that plugin, whatever the network, the SIM or the subscription. The gate had been
+run, and it agreed, because agreeing is exactly what a constant does.
+
+So "it reproduced a regime whose answer I already knew" is only half a gate. The
+other half is a second regime, or a known-negative, where the instrument is
+expected to say something else. If you cannot name a condition under which the
+column would read differently, you are not measuring — and the cheapest way to
+find out is to read where the value comes from rather than to sample it again.
+
 The gate is also what licenses the claim afterwards: an instrument validated
 against a known regime can be quoted at that regime's resolution and no finer,
 and the report should say which.
