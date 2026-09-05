@@ -262,6 +262,14 @@ const MEAS = path.join(STATE_DIR, 'fp3-measurements.json');
 // not the advantage this exists to capture.
 const AFFINITY_MIN = 120;
 const FIRST_REFUSAL_MIN = 15;
+// ☠️ `release` SAYS "hand it back untouched, FOR ANOTHER WINDOW" - and the
+// dispatcher then offered the same task straight back to the window that had just
+// released it, which re-armed this gate within seconds and looped. Measured
+// 2026-09-05 on task 140. A release is a decision by this window, so it is
+// honoured for this window: the task stays available to every other session and
+// is hidden here until the cooldown passes. It is never hidden silently - the
+// count is reported - because an invisible task is worse than a repeated one.
+const RELEASED_COOLDOWN_MIN = 240;
 
 function parse(text) {
   const b = text.indexOf(BEGIN), e = text.indexOf(END);
@@ -381,6 +389,8 @@ function expired(tasks) {
 }
 
 function report(tasks, me, lane) {
+  const declined = [];
+  const released = (readClaims().__released) || {};
   const byId = new Map(tasks.filter((t) => t.id != null).map((t) => [t.id, t]));
   const claims = liveClaims();
   const done = completions();
@@ -416,6 +426,13 @@ function report(tasks, me, lane) {
           Date.now() - own.at < FIRST_REFUSAL_MIN * 60000) {
         refused.push({ t, own }); continue;
       }
+      // ☠️ A task this window released stays released here (see
+      // RELEASED_COOLDOWN_MIN). Another session still sees it.
+      const rel = released[String(t.id)];
+      if (rel && me && rel.session === me &&
+          Date.now() - rel.at < RELEASED_COOLDOWN_MIN * 60000) {
+        declined.push(t); continue;
+      }
       ready.push(own && own.session === me ? Object.assign(t, { _mine: true }) : t);
     }
   }
@@ -425,7 +442,7 @@ function report(tasks, me, lane) {
   // Priority first, then a task this window already claimed, then document order.
   ready.sort((a, b) => (prioOf(a) - prioOf(b)) || ((b._mine ? 1 : 0) - (a._mine ? 1 : 0)));
   return { ready, blocked, waiting, human, held, refused, otherLane, device, busy, lane, byId,
-    cycles: cycles(tasks), expired: expired(tasks) };
+    declined, cycles: cycles(tasks), expired: expired(tasks) };
 }
 
 function idleText(r, tasks) {
@@ -728,6 +745,17 @@ function main() {
       const prev = readClaims().__completed || {};
       if (cli === 'done') prev[String(id)] = { session: owner, at: Date.now() };
       c.__completed = prev;
+      // A release is attributed the same way a completion is: to whoever held the
+      // task, not to whoever typed the word.
+      if (cli === 'release') {
+        const rel = readClaims().__released || {};
+        rel[String(id)] = { session: owner, at: Date.now() };
+        c.__released = rel;
+      } else {
+        const rel = readClaims().__released || {};
+        delete rel[String(id)];
+        c.__released = rel;
+      }
       writeClaims(c);
       return cli === 'done'
         ? `${id} archived to ${path.basename(DONE_FILE)} and released (credited to ${owner})`
@@ -757,7 +785,12 @@ function main() {
     } else {
       console.log(`${r.ready.length} ready · ${r.blocked.length} blocked · ` +
         `${r.waiting.length} waiting · ${r.human.length} with a person` +
+        (r.declined.length ? ` · ${r.declined.length} released here` : '') +
         `   (this window: lane ${r.lane || 'any'}; phone ${r.busy || 'free'})`);
+      // ☠️ Never hide a task without saying so. A released task is still ready
+      // for every other window; it is only this one that has declined it.
+      for (const t of r.declined) console.log(
+        `  [↩] ${t.id}. ${clip(t.text, 60)}   ← released by this window; still ready elsewhere`);
       for (const t of r.ready) console.log(`  [${t._mine ? '★' : ' '}] ${t.id}. ${t.text}` +
         (t.lane ? `   [${t.lane}]` : '') +
         (t._mine ? '   ← continues work this session finished' : ''));
@@ -913,8 +946,13 @@ function main() {
       `   (waiting on something outside this session)\n` +
       `  node "${__filename}" mark ${r.ready[0].id} '@'   +  set … when/they-do` +
       `   (needs a person)\n` +
+      `  node "${__filename}" set ${r.ready[0].id} after <other-id>` +
+      `   (it waits for ANOTHER TASK in this queue - the right answer when the\n` +
+      `   reason is a dependency, and the only one the queue itself can see)\n` +
       `  node "${__filename}" release ${r.ready[0].id}` +
-      `   (hand it back untouched, for another window)\n` +
+      `   (hand it back untouched, for another window - it will not be offered\n` +
+      `   here again for ${RELEASED_COOLDOWN_MIN / 60} h, so this is not a way to say "not now" to\n` +
+      `   yourself: use a marker or a dependency for that)\n` +
       (r.ready.length > 1 ? `(${r.ready.length - 1} more ready behind it.)\n` : ''),
   }));
   process.exit(0);
