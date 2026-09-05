@@ -260,7 +260,6 @@ function main() {
   writeState(all);
 
   const ask = gl('askLine', 'results-guard');
-  gl('log', 'results-guard', `${un.length} unrecorded, ${lints.length} lint`);
 
   // ☠️ THE LINTS DO NOT BLOCK ON THEIR OWN. They are advice about wording that is
   // already written down; blocking on advice is how a channel gets skimmed. Only
@@ -280,12 +279,19 @@ function main() {
     (lints.length ? `And check these, in what is already written (advice, not a block):\n` +
       `  - ${lints.join('\n  - ')}\n` : '');
 
+  // ☠️ ONLY A FIRING THAT ACTUALLY GATED SOMETHING GOES IN THE GATE LOG. This
+  // used to log unconditionally, so a lint-only pass - which by design does not
+  // block, see above - was recorded as a gate firing and then asked for a
+  // catch/false/override verdict. There is nothing to override in a notice that
+  // held nothing up, and 20260905.32 ("0 unrecorded, 2 lint") could not be
+  // labelled honestly for exactly that reason. Advisory output is not a gate.
   if (!un.length) {
     process.stdout.write(JSON.stringify({
       hookSpecificOutput: { hookEventName: 'Stop', additionalContext: body },
     }));
     process.exit(0);
   }
+  gl('log', 'results-guard', `${un.length} unrecorded, ${lints.length} lint`);
   process.stdout.write(JSON.stringify({
     decision: 'block',
     systemMessage: t('results.unrecorded', { n: un.length }, ev.cwd),
