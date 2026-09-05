@@ -23,7 +23,7 @@
 // and the interesting case here is exactly "what did we think at the time".
 //
 //   gatelog.cjs log <gate> [detail...]        → prints the id it wrote
-//   gatelog.cjs outcome <id|last> <catch|false|override> [why...]
+//   gatelog.cjs outcome <id|last> <catch|false|override|followed> [why...]
 //   gatelog.cjs report [days]                 → per gate: fired, catches, false,
 //                                               overrides, unlabelled
 //   gatelog.cjs pending                       → the unlabelled firings, oldest first
@@ -39,7 +39,15 @@ const FILE = process.env.FP3_GATELOG ||
   path.join(process.env.CLAUDE_STATE_DIR ||
     path.join(process.env.HOME || '/home/fp3', '.claude', '.state'), 'fp3-gatelog.jsonl');
 
-const OUTCOMES = ['catch', 'false', 'override'];
+// ☠️ `followed` was added 2026-09-05 because the vocabulary had no word for the
+// outcome a DISPATCHER gate is supposed to produce: it proposed the right next
+// task and the proposal was acted on. That firing stopped no mistake (not a
+// catch), blocked nothing (not false) and was not ignored (not an override), so
+// every honest label distorted the record - and since the verdict below reads
+// `false > catch` as NET NEGATIVE, labelling successful dispatches `false` made
+// a working gate look harmful. Measured on the queue gate, which spent a day
+// mostly dispatching correctly and scoring badly for it.
+const OUTCOMES = ['catch', 'false', 'override', 'followed'];
 
 function append(rec) {
   try {
@@ -94,9 +102,9 @@ function askLine(gate) {
   const ago = ((Date.now() - last.t) / 36e5).toFixed(1);
   return `\n☠️ The previous firing of this gate (${last.id}, ${ago} h ago) is still ` +
     `unlabelled, so nobody can say whether this gate earns its place. One word:\n` +
-    `  node "${__filename}" outcome ${last.id} catch|false|override -- "<what happened>"\n` +
+    `  node "${__filename}" outcome ${last.id} catch|false|override|followed -- "<what happened>"\n` +
     `  catch = it stopped a real mistake · false = it blocked correct work · ` +
-    `override = it was pushed past.`;
+    `override = it was pushed past · followed = it proposed and was acted on.`;
 }
 
 function report(days) {
@@ -107,7 +115,7 @@ function report(days) {
   for (const r of rows) if (r.kind === 'outcome') out.set(r.id, r.outcome);
   const by = new Map();
   for (const f of fires) {
-    const g = by.get(f.gate) || { fired: 0, catch: 0, false: 0, override: 0, unlabelled: 0 };
+    const g = by.get(f.gate) || { fired: 0, catch: 0, false: 0, override: 0, followed: 0, unlabelled: 0 };
     g.fired++;
     const o = out.get(f.id);
     if (o && OUTCOMES.includes(o)) g[o]++; else g.unlabelled++;
@@ -115,12 +123,12 @@ function report(days) {
   }
   const lines = [];
   lines.push(`${'gate'.padEnd(24)} ${'fired'.padStart(5)} ${'catch'.padStart(5)} ` +
-    `${'false'.padStart(5)} ${'ovrd'.padStart(5)} ${'?'.padStart(4)}  verdict`);
+    `${'false'.padStart(5)} ${'ovrd'.padStart(5)} ${'flwd'.padStart(5)} ${'?'.padStart(4)}  verdict`);
   for (const [g, v] of [...by].sort((a, b) => b[1].fired - a[1].fired)) {
     // ☠️ A VERDICT IS ONLY SPOKEN WHEN IT CAN BE. The judged fraction has to be
     // most of the firings before "net negative" means anything; below that the
     // honest output is "not enough labels", not a number with a straight face.
-    const judged = v.catch + v.false + v.override;
+    const judged = v.catch + v.false + v.override + v.followed;
     // ☠️ THE TWO REASONS FOR "CANNOT SAY" ARE DIFFERENT AND MUST NOT READ ALIKE.
     // Too few firings is a gate nobody has tested yet; too few labels is a gate
     // nobody has judged. The first is fixed by waiting, the second by working -
@@ -128,10 +136,10 @@ function report(days) {
     // the first.
     const verdict = v.fired < 3 ? `too few firings yet (${v.fired})`
       : judged < v.fired * 0.5 ? `only ${judged}/${v.fired} labelled — judge them, or this stays unanswerable`
-        : v.false > v.catch ? '☠️ NET NEGATIVE — more false blocks than catches'
-          : v.catch ? 'earns its place' : 'no catches yet';
+        : v.false > (v.catch + v.followed) ? '☠️ NET NEGATIVE — more false blocks than useful firings'
+          : (v.catch + v.followed) ? 'earns its place' : 'no useful firings yet';
     lines.push(`${g.padEnd(24)} ${String(v.fired).padStart(5)} ${String(v.catch).padStart(5)} ` +
-      `${String(v.false).padStart(5)} ${String(v.override).padStart(5)} ` +
+      `${String(v.false).padStart(5)} ${String(v.override).padStart(5)} ${String(v.followed).padStart(5)} ` +
       `${String(v.unlabelled).padStart(4)}  ${verdict}`);
   }
   const tot = fires.length;
