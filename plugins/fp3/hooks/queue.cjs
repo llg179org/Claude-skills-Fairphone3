@@ -237,7 +237,22 @@ function completions() {
 // `lane: phone` task takes it, `done`/`release` gives it back, a running
 // unattended measurement (measurement-watch's state) holds it too - and no other
 // window is handed a phone task while it is held.
-const KEYS = ['after', 'continues', 'until', 'when', 'they-do', 'why', 'lane'];
+const KEYS = ['after', 'continues', 'until', 'when', 'they-do', 'why', 'lane', 'prio'];
+
+// ☠️ PRIORITY IS THE OPERATOR'S ORDER, NOT A GUESS AT IMPORTANCE. Without it the
+// dispatcher hands out ready work in id order, which on 2026-09-05 meant offering
+// energy measurements while the stated first priority was a touchscreen fix - and
+// the only way to hold the order was to park tasks by hand, one at a time, as they
+// surfaced. `prio: <n>` sorts ready work; lower runs first; unset means 50, so an
+// unprioritised task sits behind anything explicitly raised and ahead of anything
+// explicitly lowered. It does NOT override `after:` or `until:` - a blocked task
+// stays blocked however high it is, because priority is about choosing among things
+// that can actually run.
+const PRIO_DEFAULT = 50;
+const prioOf = (t) => {
+  const n = Number(t.prio);
+  return Number.isFinite(n) ? n : PRIO_DEFAULT;
+};
 const LANES = ['phone', 'upstreaming', 'any'];
 const MEAS = path.join(STATE_DIR, 'fp3-measurements.json');
 
@@ -407,7 +422,8 @@ function report(tasks, me, lane) {
   // ☠️ MY OWN CONTINUATION GOES FIRST, and only that. Beyond it the file's order
   // is the priority a person set, and a scheduler that reorders on its own guesses
   // is a scheduler nobody can predict.
-  ready.sort((a, b) => (b._mine ? 1 : 0) - (a._mine ? 1 : 0));
+  // Priority first, then a task this window already claimed, then document order.
+  ready.sort((a, b) => (prioOf(a) - prioOf(b)) || ((b._mine ? 1 : 0) - (a._mine ? 1 : 0)));
   return { ready, blocked, waiting, human, held, refused, otherLane, device, busy, lane, byId,
     cycles: cycles(tasks), expired: expired(tasks) };
 }
