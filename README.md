@@ -276,6 +276,16 @@ Two values deliberately have **no** default, because they are yours:
 * `FP3_PW` — the password of the pmOS user, whatever you set during
   `pmbootstrap init`. The scripts use it for `sshpass` and for `sudo -S` on the
   device.
+
+  ☠️ **An SSH key removes only half of this need, and it is easy to assume it
+  removed all of it.** `fp3-link install-key` makes the *login* passwordless,
+  but `sudo` on the phone authenticates against PAM locally and has no idea the
+  session arrived over a key — so privileged work still stops for a password
+  that a fresh window does not have. If you want it gone for good, run
+  `fp3-porting-debug/scripts/setup-nopasswd.sh` once, from a real terminal.
+  Read its header first: it makes the host's SSH private key worth root on the
+  phone, which is a fair trade on a disposable dev device and not one to make
+  absent-mindedly.
 * `FP3_SERIAL` — your device's USB serial number. The flashing scripts pass it
   to `fastboot -s` so they act on the right phone if anything else is plugged
   in, and it is how a script tells "the phone came back" from "some other

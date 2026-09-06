@@ -22,6 +22,7 @@ directory.
 | `fp3-env.local.sh.example` | Copy to fp3-env.local.sh (git-ignored) and fill in your own values. Anything you do not set falls back to the documented default in fp3-env.sh. |
 | `fp3-ssh.sh` | fp3-ssh — SSH/scp to the FP3 dev device (pmOS) over the stable NCM link. Prefers key auth; retries with a neighbour flush when the link is mid-reconnect. |
 | `fp3-link.sh` | fp3-link — host-side NCM link helper for the FP3 dev device (pmOS). `status`/`ip`/`wait`, plus `heal` (neighbour flush + NM bounce) and `install-key`. |
+| `setup-nopasswd.sh` | One-time: install a NOPASSWD sudoers drop-in on the device, so the password (= the screen-unlock PIN) is never needed again. An SSH key solves the *login* gate but cannot solve `sudo`, which authenticates locally. ☠️ Must be run on a real tty, and it makes the host's SSH key worth root. |
 | `ut-ssh.sh` | ut-ssh — reach the device while it runs Ubuntu Touch, with no unlock and no replug: USB rndis, then WiFi, then UT's usb-moded rescue sshd. |
 | `usb-repower-safely.sh` | Power-cycle a USB port without corrupting a USB-attached work disk (quiesce, clean SCSI delete, remount by UUID). Usually unnecessary — check the bus topology first. |
 | `post-reboot.sh` | Config lives in fp3-env.sh; every value there has a documented default. |
