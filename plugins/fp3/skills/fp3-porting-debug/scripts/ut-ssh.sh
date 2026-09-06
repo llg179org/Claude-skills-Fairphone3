@@ -45,9 +45,24 @@ targets() {
     echo "$FP3_UT_USER@$FP3_UT_USB_IP $FP3_UT_RESCUE_PORT"
 }
 
+# ☠️ THE TARGET LIST IS READ ON FD 3, NOT ON STDIN, and that is the whole point.
+# With `done <<< "$(targets)"` the loop's stdin IS the here-string, ssh inherits
+# it, and the CALLER's stdin never reaches the remote command. Measured
+# 2026-09-06: `printf pw | ut-ssh 'sudo -S id'` sent ssh the target list, so
+# sudo received "phablet@10.42.0.1 22" as the password and answered "Sorry, try
+# again" - which reads exactly like a wrong password and cost half a session,
+# because the same password over a direct ssh gave uid=0 immediately.
+#
+# fp3-ssh.sh never had this: its loop is a plain counter with no redirection,
+# which is why `echo pw | fp3-ssh 'sudo -S ...'` has always worked on pmOS.
+#
+# ☠️ Note the limit that remains: stdin is a stream, so the FIRST target that
+# runs consumes it. A retry against a later path gets an empty stdin. That is
+# inherent to piping into a multi-path wrapper; for anything that must not be
+# retried blind, use a direct ssh.
 i=1
 while [ "$i" -le "$TRIES" ]; do
-    while read -r dest port; do
+    while read -r dest port <&3; do
         [ -n "$dest" ] || continue
         if [ "$#" -eq 0 ]; then
             ssh $OPTS -p "$port" "$dest" && exit 0
@@ -59,7 +74,7 @@ while [ "$i" -le "$TRIES" ]; do
         # 255 is ssh's own transport failure; any other status came from the
         # remote command itself and is a real answer, so stop and report it.
         [ "$rc" -ne 255 ] && exit "$rc"
-    done <<< "$(targets)"
+    done 3<<< "$(targets)"
 
     ip neigh flush dev "$FP3_UT_IFACE" 2>/dev/null || true
     echo "ut-ssh: no answer on any path (attempt $i/$TRIES), retrying" >&2

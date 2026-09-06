@@ -378,6 +378,25 @@ than a deleted one.
   blocker.)
 - Partition labels drift — re-derive from `lsblk`/`by-partlabel` on a booted OS
   each session rather than trusting a remembered map.
+☠️ **Getting root on Ubuntu Touch, and the two things that make it look impossible.**
+`sudo` on UT wants the password (the NOPASSWD drop-in from
+`scripts/setup-nopasswd.sh` is a pmOS-side install), and two traps then conspire
+to make a correct password look wrong:
+
+- **`ut-ssh` used to eat the caller's stdin** — its target loop read the list on
+  stdin, so `printf pw | ut-ssh 'sudo -S id'` handed ssh the *target list* and
+  sudo answered "Sorry, try again". Fixed 2026-09-06 (the list is read on fd 3);
+  `fp3-ssh` never had it. If a piped password ever fails again, try a direct
+  `ssh $FP3_UT_USER@$FP3_UT_USB_IP` before doubting the password.
+- **The password is in `fp3-env.local.sh`,** not in `fp3-env.sh`, whose empty
+  default means "yours goes in the local file", not "there is none".
+
+**Reaching fastboot from UT** needs root: `adb reboot bootloader` fails with
+*"Failed to write reboot parameter file: Permission denied"* as `phablet`, and
+`systemctl reboot bootloader` fails with *"Too many arguments"*. What works is
+`sudo reboot bootloader`. From there `fastboot set_active a|b` + `fastboot
+reboot` is the ordinary slot switch.
+
 - **Neither OS needs a human at the phone.** `fp3-ssh 'cmd'` (pmOS) and `ut-ssh 'cmd'`
   (Ubuntu Touch — USB, then WiFi, then UT's rescue sshd) log in by key and heal the link
   themselves; each OS comes back from a reboot untouched (39 s / 76 s, measured). The

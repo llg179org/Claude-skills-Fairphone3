@@ -12,6 +12,13 @@ export GEN="${GEN:-$FP3_SCRIPTS/generated}"; mkdir -p "$GEN" 2>/dev/null || true
 # --- device access ----------------------------------------------------------
 # Password of the pmOS user. NO DEFAULT ON PURPOSE: it is whatever you set when
 # you installed pmOS. Set it in fp3-env.local.sh or export it before running.
+# ☠️ EMPTY HERE BY DESIGN - THE VALUE LIVES IN fp3-env.local.sh (git-ignored).
+# An empty default is not "the password is stored nowhere". Measured 2026-09-06:
+# a session read this line, concluded the password was held nowhere on the
+# machine, told the operator so twice, and worked around its absence for half a
+# session - while fp3-env.local.sh sat next to this file with the value in it.
+# The pointer is in README.md, INDEX.md and the skill; it is repeated HERE
+# because this line is where the reader actually is.
 export FP3_PW="${FP3_PW:-}"
 export FP3_USER="${FP3_USER:-fp3}"          # default: the pmOS username
 export FP3_DEV_IP="${FP3_DEV_IP:-172.16.42.1}"   # default: pmOS USB-net device address
