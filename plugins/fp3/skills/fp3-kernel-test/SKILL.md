@@ -63,7 +63,7 @@ is why almost every technique below has a "golden side" and a "test side".
 
 ---
 
-## Say it unprompted: five things every report must carry
+## Say it unprompted: six things every report must carry
 
 These are **reporting** rules, not extra work. They exist because the failure
 they prevent is not "no check was run" — it is a check that ran, passed, and
@@ -206,6 +206,36 @@ find out is to read where the value comes from rather than to sample it again.
 The gate is also what licenses the claim afterwards: an instrument validated
 against a known regime can be quoted at that regime's resolution and no finer,
 and the report should say which.
+
+**6. A change that reached the device gets its four-line trail in the bring-up
+page, on the day it happened.** Not the commit message - that says what the patch
+does. The trail says why the patch exists, and it is four things in order:
+
+| | what it must answer |
+|---|---|
+| **symptom** | what was observed, in whose words, with the timestamp and the log line |
+| **how to provoke it** | the command or the gesture that brings it back, and its measured hit rate |
+| **the change** | which commit, and what it does to the mechanism - not to the symptom |
+| **the effect** | the same measurement after, against the same instrument, including "no change" |
+
+Write it while the capture is open. Months later an upstream reviewer asks *"why
+is this the way it is?"* and the honest answer needs all four; reconstructing
+them from commits and memory is how invented rationale gets into a reply, which
+`/msm8953-mainline-pr` forbids under "Factual integrity" for good reason.
+
+☠️ **The fourth line is the one that gets skipped, and it is the one that
+matters.** A change with no measured effect is not finished, it is merely
+shipped - and "the effect was nothing" is a result worth as much as any other.
+It also protects against a trap this port has hit twice: a fix that is *correct*
+for the mechanism it targets while the operator's fault continues, because one
+symptom had two mechanisms behind it. Only the fourth line surfaces that.
+
+☠️ **And it goes in the bring-up page, not only in the capture.** A capture is a
+record of one run; the bring-up page is the story a stranger reads. Section
+numbering that grows by date is enough - what is not enough is leaving the page
+saying something the last three flashes have already disproved. Check the page's
+own status line every time you add to it; the cost of not doing so is a document
+that reads as current and is not.
 
 ☠️ **The case this cost.** A DTB built in a camera-only worktree was deployed to
 the device, dropping the audio, voice, charger, sensor and debug layers. The

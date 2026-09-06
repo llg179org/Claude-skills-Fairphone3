@@ -368,6 +368,15 @@ say in the message that you did — and where the code is *substantially* still
 theirs, the honest move is to keep **them** as the patch author
 (`git commit --author`) and describe your changes in the follow-up commit.
 
+☠️ **Before you write that paragraph, go and read the bring-up page's trail for
+this change.** `/fp3-kernel-test` rule 6 requires every change that reached the
+device to leave four lines there - the symptom, how it was provoked, what the
+change does to the mechanism, and what the same measurement said afterwards. That
+trail is what a maintainer's *"why is this the way it is?"* actually wants, and
+it is the difference between a checked answer and a reconstructed one. If the
+trail is missing, the honest move is to say the effect was not measured, never to
+infer it from the diff.
+
 Then, for your own commits, a provenance paragraph splitting the change three
 ways:
 
