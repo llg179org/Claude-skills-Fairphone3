@@ -1129,10 +1129,48 @@ always.
 Two things it does not replace: the package is still what gets installed, and
 the artifact gate below still applies to whatever you deploy.
 
-☠️ **Waiting for that build: `pgrep -f` matches the waiter itself.** A loop like
-`while pgrep -f 'pmbootstrap.*build' >/dev/null; do sleep 45; done` never exits,
-because the pattern appears in the loop's own `bash -c` command line — so the
-wait reports "still building" forever, including long after the build has
+### ☠️ Every `_commit` bump costs a source download, and the host rate-limits it
+
+The package fetches a ~250 MB tarball from the forge for each new `_commit`.
+That endpoint has a quota: after a handful of bumps in one day it answers
+**429 Too Many Requests** and the build stops at `pmb checksum`, for hours.
+Three consequences worth knowing before you plan a round of experiments:
+
+* **Authenticating does not lift it** — the limit is on the archive generator,
+  not on the API quota, so a token buys nothing.
+* **The same `_commit` rebuilds for free.** The tarball is kept in the
+  distfiles cache, so re-running a build at an unchanged `_commit` never
+  refetches. The cost is per *new commit hash*, not per build.
+* **The push is a different endpoint entirely.** Pushing over SSH is not rate
+  limited and has nothing to do with this; reducing how often you push does not
+  help, and is the wrong lever to reach for.
+
+So the lever is **how many distinct `_commit` values you flash**, and that puts
+this rule straight into tension with safety rule 1, *one change per experiment*.
+Resolve it by asking what you are about to measure:
+
+> **Batch by measurement, not by convenience.** Several commits may share one
+> `_commit` when **at most one of them can move the number you are about to
+> measure**; the rest must be inert to it - a log line, a comment, a diagnostic
+> that only fires on a path you are not testing. The moment two changes could
+> each explain the result, they need separate flashes, and the tarball is simply
+> what a clean experiment costs.
+
+Worked example, 2026-09-05: r84 carried a bus-clear *and* a status decode. Only
+the bus-clear could change the outcome; the decode merely printed, so one flash
+was honest. r85 then carried the `IRQ_NONE` fix alone, because that one could.
+Four bumps in that day is what triggered the 429 - and two of them were avoidable
+by this rule, not by pushing less.
+
+☠️ And whatever you batch, the deploy discipline still applies: *a measurement
+taken after a flash has to name every commit the flash brought, or it is a
+two-variable experiment wearing one variable's label.*
+
+☠️ **`pgrep -f` matches the checker itself, in BOTH directions.** The loop form
+is the obvious one: `while pgrep -f 'pmbootstrap.*build' >/dev/null; do sleep 45;
+done` never exits, because the pattern appears in the loop's own `bash -c`
+command line — so the wait reports "still building" forever, including long after
+the build has
 finished, and the same false positive makes a "is it running?" spot-check
 useless. Wait on something that cannot match itself:
 
@@ -1140,6 +1178,24 @@ useless. Wait on something that cannot match itself:
 P=$(pgrep -af pmbootstrap.py | grep -v 'bash -c' | awk '{print $1}' | head -1)
 while [ -d /proc/$P ]; do sleep 45; done
 ```
+
+☠️ **The other direction is the dangerous one, because it reads as good news.**
+Measured 2026-09-05: a build had been killed with the tree half-compiled, and
+`pgrep -f "abuild -d -D postmarketOS"` still returned success — matching the
+very command line that ran the check — so the report said *"abuild is alive, a
+gcc is running, the build is progressing"* about a build that had been dead for
+half an hour. A `pgrep -c -f aarch64-alpine` counting **1** was the same
+artifact. What settled it was asking a question the checker cannot answer about
+itself:
+
+```sh
+ps -o pid,stat,pcpu,etime -p "$P"                      # empty output = gone
+sudo find <build tree> -newermt '-3 minutes' -type f | wc -l    # 0 = nothing is being written
+```
+
+The second one is the honest instrument for "is work happening": a compiler that
+is running writes files, and a build that is stalled or dead does not, whatever
+any process table says.
 
 ☠️ **The same self-match is fatal, not merely useless, with `pkill -f`** — and
 it bites hardest over SSH, where the pattern travels inside the remote shell's
