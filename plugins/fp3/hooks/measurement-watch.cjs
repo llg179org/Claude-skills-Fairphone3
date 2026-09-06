@@ -75,10 +75,27 @@ process.stdin.on('end', () => {
     const bg = ev.tool_input?.run_in_background === true;
     const notes = [];
 
+    // ☠️ A unit that REBOOTS the device is not a measurement, and demanding a
+    // watcher for one is incoherent twice over: it produces no result to
+    // collect, and the shape this hook asks for -- poll
+    // `systemctl show -p ActiveState <unit>` until it reads inactive -- can
+    // never succeed, because the unit ceases to exist together with the system
+    // it reboots. Measured: four false firings on exactly this
+    // (20260904.10, 20260905.6, 20260906.1 and one before the log), each one
+    // blocking correct work. The right watcher for a reboot polls the DEVICE
+    // (down, then back, then check what it booted), which names no unit at all,
+    // so rule 2 could not recognise it either.
+    const REBOOT_PAYLOAD = /\b(systemctl\s+(reboot|poweroff|halt|kexec|suspend|hibernate)|\breboot\b|\bpoweroff\b|shutdown\s)/;
+
     // 1. a measurement being launched on the device
     for (const m of cmd.matchAll(/systemd-run\s+[^|;&]*?--unit=([A-Za-z0-9_.@-]+)/g)) {
       const unit = m[1];
       if (PLACEHOLDER.test(unit)) continue;   // documentation, not a run
+      // The payload is whatever follows --unit= up to the next command
+      // separator; test that, not the whole line, so an unrelated `reboot`
+      // elsewhere in a compound command cannot excuse a real measurement.
+      const tail = cmd.slice(m.index + m[0].length).split(/[|;&]/)[0];
+      if (REBOOT_PAYLOAD.test(tail)) continue;
       if (!state[unit]) state[unit] = { started: Date.now(), watcher: false };
     }
 
