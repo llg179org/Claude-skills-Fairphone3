@@ -1129,42 +1129,61 @@ always.
 Two things it does not replace: the package is still what gets installed, and
 the artifact gate below still applies to whatever you deploy.
 
-### ☠️ Every `_commit` bump costs a source download, and the host rate-limits it
+### ☠️ Too many `_commit` bumps in a day and the build stops working
 
-The package fetches a ~250 MB tarball from the forge for each new `_commit`.
-That endpoint has a quota: after a handful of bumps in one day it answers
-**429 Too Many Requests** and the build stops at `pmb checksum`, for hours.
-Three consequences worth knowing before you plan a round of experiments:
+**What you see.** `pmb checksum` fails, and the useful line is buried in
+`work/log.txt`:
 
-* **Authenticating does not lift it** — the limit is on the archive generator,
-  not on the API quota, so a token buys nothing.
-* **The same `_commit` rebuilds for free.** The tarball is kept in the
-  distfiles cache, so re-running a build at an unchanged `_commit` never
-  refetches. The cost is per *new commit hash*, not per build.
-* **The push is a different endpoint entirely.** Pushing over SSH is not rate
-  limited and has nothing to do with this; reducing how often you push does not
-  help, and is the wrong lever to reach for.
+```
+>>> linux-fp3: Fetching linux-fp3-<sha>.tar.gz::https://github.com/.../<sha>.tar.gz
+wget: server returned error: HTTP/1.1 429 Too Many Requests
+>>> ERROR: linux-fp3: checksum failed
+```
 
-So the lever is **how many distinct `_commit` values you flash**, and that puts
-this rule straight into tension with safety rule 1, *one change per experiment*.
-Resolve it by asking what you are about to measure:
+It is not your commit, not your network, and not fixable by retrying for a
+while: it stayed for hours on 2026-09-05 and cleared overnight on its own.
 
-> **Batch by measurement, not by convenience.** Several commits may share one
-> `_commit` when **at most one of them can move the number you are about to
-> measure**; the rest must be inert to it - a log line, a comment, a diagnostic
-> that only fires on a path you are not testing. The moment two changes could
-> each explain the result, they need separate flashes, and the tarball is simply
-> what a clean experiment costs.
+**What causes it.** The APKBUILD fetches the kernel source as a **~250 MB
+tarball** from the forge, once for every new `_commit`. The forge rate-limits
+that endpoint. Four bumps in one day was enough to trip it.
 
-Worked example, 2026-09-05: r84 carried a bus-clear *and* a status decode. Only
-the bus-clear could change the outcome; the decode merely printed, so one flash
-was honest. r85 then carried the `IRQ_NONE` fix alone, because that one could.
-Four bumps in that day is what triggered the 429 - and two of them were avoidable
-by this rule, not by pushing less.
+**Three things that are easy to get wrong about it:**
 
-☠️ And whatever you batch, the deploy discipline still applies: *a measurement
-taken after a flash has to name every commit the flash brought, or it is a
-two-variable experiment wearing one variable's label.*
+* **It is not the push.** Pushing goes over SSH, a completely different endpoint,
+  and was never limited - every push that day succeeded. Pushing less often does
+  nothing for this.
+* **A token does not help.** The limit is on the tarball generator, not on the
+  API quota; an authenticated request gets the same 429.
+* **Rebuilding the same `_commit` is free.** The tarball stays in
+  `work/cache_distfiles`, so only a *new commit hash* costs a download. The
+  price is per pin, not per build.
+
+☠️ **And the failing download still writes a file.** `curl` reported
+`http=429 bytes=313` and produced a 313-byte error page. Put that in the
+distfiles cache under the tarball's name and `pmb checksum` will record the
+sha512 of an error page as the kernel's checksum. Use `curl -f`, which refuses to
+write a body on an HTTP error, and check the size as well as the status.
+
+**So the lever is how many different `_commit` values you flash** - and that
+runs straight into safety rule 1, *one change per experiment*. The two are
+reconciled by asking what you are about to measure:
+
+> **Put several commits in one flash only when at most one of them could change
+> the result.** The others have to be incapable of moving that number - a log
+> line, a comment, a diagnostic on a path you are not testing. If two changes
+> could each explain what you see, they need separate flashes, and the download
+> is simply what a clean experiment costs.
+
+Worked example from the day this was written: r84 shipped a bus-clear **and** a
+register decode. Only the bus-clear could change the outcome - the decode just
+printed - so one flash was honest. r85 then shipped the `IRQ_NONE` fix on its
+own, because that one could change the outcome and nothing else was allowed to
+share the blame. Of the four bumps that tripped the limit, two could have been
+merged under this rule; none of them would have been saved by pushing less.
+
+☠️ Whatever you do batch, the deploy discipline still holds: *a measurement taken
+after a flash has to name every commit the flash brought, or it is a two-variable
+experiment wearing one variable's label.*
 
 ☠️ **`pgrep -f` matches the checker itself, in BOTH directions.** The loop form
 is the obvious one: `while pgrep -f 'pmbootstrap.*build' >/dev/null; do sleep 45;
