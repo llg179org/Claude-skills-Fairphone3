@@ -619,7 +619,14 @@ function main() {
       } else {
         const id = Number(process.argv[3]);
         if (!id) return `usage: ${cli} <id> …`;
-        const line = new RegExp(`^\\s*-\\s*\\[([ x~@])\\]\\s*${id}\\.`, 'm');
+        // ☠️ [ \t] and NOT \s before the dash. \s matches a NEWLINE, so with a
+        // blank line above the task `^\s*-` matched starting AT THAT BLANK LINE,
+        // two characters early. `set 177 until …` then appended to the previous
+        // task's block instead - and still reported "177 updated". Measured
+        // 2026-09-06 on the real TODO.md: index 33205 (`\n\n- [~] 177.`) with
+        // \s, 33207 (`- [~] 177.`) with [ \t]. The write passed validation
+        // because the task count did not change.
+        const line = new RegExp(`^[ \\t]*-\\s*\\[([ x~@])\\]\\s*${id}\\.`, 'm');
         if (!line.test(body)) return `no task ${id} in the queue`;
         if (cli === 'mark') {
           const m = process.argv[4];
@@ -672,7 +679,7 @@ function main() {
     if (!id) { console.error(`usage: ${cli} <id>`); process.exit(1); }
     const out = withLock(() => {
       const cur = fs.readFileSync(TODO, 'utf8');
-      const re = new RegExp(`^(\\s*-\\s*\\[)[ x~@](\\]\\s*${id}\\.)`, 'm');
+      const re = new RegExp(`^([ \\t]*-\\s*\\[)[ x~@](\\]\\s*${id}\\.)`, 'm');
       if (!re.test(cur)) return `no task ${id} in the queue`;
       if (cli === 'done' || cli === 'drop') {
         // Cut the whole task block - the checkbox line and its indented keys.
