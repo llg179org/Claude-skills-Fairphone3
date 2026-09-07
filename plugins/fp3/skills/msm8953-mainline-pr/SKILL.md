@@ -1317,6 +1317,25 @@ message-id". Three states with three different plans:
 | **never posted at all** (patchwork empty) | there is no message-id to depend on; the file does not exist upstream to patch. Do not send. Offer the work to whoever carries it |
 | merged since your base | just rebase; there is no dependency |
 
+☠️ **A patchwork `state` is per PATCH, and a cover letter has none.** A series
+whose cover letters all read `-` looks exactly like one that went nowhere, and
+that reading is wrong often enough to be a trap. Measured 2026-09-07: searching
+`codec-to-codec` returned Martin Blumenstingl's *"ASoC: prepare streams on
+codec-to-codec links"* as three rounds (RFC v1, RFC v2, v3, Jan 2025) with state
+`-` on every row — and the work **is in mainline**, commit `e436d4355176`. Only
+the `0/N` cover letters had matched the query; the patches that carry the state
+were never in the result set.
+
+Two consequences, and the second is the general one:
+
+- **Filter the covers out before reading states** — a row whose subject matches
+  `\[.*,0/\d+\]` is a cover letter and carries no verdict.
+- ☠️ **Ask the tree, not the tracker.** `git merge-base --is-ancestor <sha>
+  <base>` and `git log --grep=<subject>` answer "did this land?" definitively;
+  patchwork answers "what did this tracker record about some of the emails". Same
+  class as the `sort -V` merge-window trap above: a lookup that is easy, plausible
+  and biased toward one wrong answer.
+
 The declaration mechanism is `b4`, not prose and not a fork branch:
 
 ```sh
