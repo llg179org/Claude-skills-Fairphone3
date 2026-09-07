@@ -1709,6 +1709,63 @@ find out who else patches it before you write.** The same search that later foun
 the camera driver's real origin would have found this; it was simply never run for
 that category.
 
+### …and search the web, and search AGAIN when you are done
+
+The commands above ask git and patchwork. They do not ask the places where this
+kind of work actually surfaces first: mailing-list threads, distro and project
+issue trackers, other phone ports' repositories, developers' posts. **Search
+those too**, by symptom and by identifier, not only by filename:
+
+```sh
+# the message text, the register name, the QMI/QRTR port, the DT compatible,
+# the exact error string a user would paste - those are what others wrote about
+```
+
+☠️ **Run the search twice: before, and again when the work is finished.**
+
+- **Before**, because the point is not to spend the weeks. The cost of skipping
+  it on this port was measured: a DAPM route "discovered", written up in three
+  documents as new, and already present line for line in a 2022 commit on
+  another tree.
+- **After**, for two reasons the first pass cannot cover. Someone may have posted
+  it *while you were working* — an out-of-tree subsystem moves. And you now know
+  **what to search for**: the right register, the right port number, the right
+  error string. A search run at the start with the wrong vocabulary finds
+  nothing and proves nothing.
+
+**If theirs predates ours, cite it — do not re-create it.** Priority goes by
+date, and the duty is a `Link:` in the commit message or the cover letter, in the
+words that say what it is and how ours relates to it. That is cheaper than the
+alternative in every direction: it saves the reviewer the search, it removes a
+novelty claim they could puncture in one query, and it is how a maintainer learns
+that two people converged rather than that one copied.
+
+☠️ **Citing is not the same as abandoning.** Independent, later work is still
+worth sending when it is better shaped — upstream-formed where theirs was a hack,
+or general where theirs was hardcoded. What is forbidden is presenting it as
+first. Say plainly what existed, what it did, and what ours does differently;
+"prior art X does this with a blanket `IRQF_NO_SUSPEND`; this series keeps the
+filter in user space and uses a wake IRQ" is a stronger sentence than silence,
+and it is the sentence that survives review.
+
+★ **Worked, 2026-09-07.** A tester's letter pointed at
+[ModemManager work item 694](https://gitlab.freedesktop.org/mobile-broadband/ModemManager/-/work_items/694),
+"RFC: QRTR wake on SMS/Call support" — a public discussion of exactly the problem
+this port carries as `upstreaming/qcom-smd-wake`, with a two-year-old kernel
+patch behind it. Neither the git nor the patchwork query above would have found
+it: it is an issue tracker in another project. It belongs in that series' cover
+letter as prior art, and the series is *better* for saying so, because the
+difference between the two designs is the argument for ours.
+
+☠️ **A citation is a claim and gets verified like any other.** Fetch it before
+writing it down, and keep the control:
+
+```sh
+curl -sL -o /dev/null -w '%{http_code}\n' "https://lore.kernel.org/all/<msgid>/t.mbox.gz"   # 200
+curl -sL -o /dev/null -w '%{http_code}\n' "https://lore.kernel.org/all/BOGUS@example.invalid/t.mbox.gz"  # 404
+curl -sL "https://lore.kernel.org/all/<msgid>/t.mbox.gz" | zcat | grep -m1 '^Subject:'       # ties id to thread
+```
+
 ### A `Fixes:` target comes from blame, never from the file's age
 
 A line that looks like an ancient oversight may be two months old, and the

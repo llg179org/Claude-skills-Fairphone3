@@ -1761,6 +1761,15 @@ carefully to work out whether your part is inside or outside it.
   measurements and theirs is the finding: here the measured service id, version
   and instance matched byte-for-byte, and the one thing measurement could not have
   produced — a message id — was exactly what had been missing.
+  ☠️ **And search AGAIN when the work is finished**, for two reasons the first
+  pass cannot cover: someone may have posted it while you were working, and you
+  now know *what to search for* — the right register, port number or error
+  string — where the opening query had the wrong vocabulary. If theirs predates
+  yours, **cite it rather than re-create it**; citing is not abandoning, and the
+  *difference* between the two designs is the argument for yours. The full rule,
+  with the citation duty and the verification that a `lore` link is real, is in
+  `/msm8953-mainline-pr` → "…and search the web, and search AGAIN when you are
+  done".
 
 - **☠️ Never reconstruct a protocol constant from memory — read the header.**
   Two independent "corrections" of a QRTR control code landed on two different
