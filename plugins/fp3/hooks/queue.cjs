@@ -301,6 +301,13 @@ const idsOf = (t) => String(t.after || '').split(/[,\s]+/).filter(Boolean).map(N
 // Finished tasks leave this section for TODO-DONE.md, so "after: 116" with no 116
 // in the queue is the normal way a dependency is satisfied. The failure mode is a
 // typo, which would silently look finished - so it is never silent.
+// ☠️ BUT A WARNING THAT CRIES WOLF IS NOT A WARNING. Measured 2026-09-07: all
+// SEVEN ids it listed (50 -> 85, 54 -> 116, 41 -> 116, 64 -> 116, 135 -> 85,
+// 172 -> 176, 177 -> 176) were archived tasks, correctly satisfied - so the line
+// fired on every `check` with nothing but false positives, and a real typo would
+// have been the eighth entry in a list nobody reads. The ids are therefore split
+// against TODO-DONE.md: found there = satisfied by the archive, one quiet line;
+// found in NEITHER file = the actual typo candidate, and that one stays loud.
 // ☠️ A CYCLE IN `after:` SILENTLY BLOCKS EVERYTHING IN IT, and looks exactly like
 // a queue that is legitimately waiting. Ported from autonomy.cjs, which refused
 // cycles at write time; here the queue is a hand-edited file, so it has to be
@@ -320,6 +327,18 @@ function cycles(tasks) {
   };
   for (const t of tasks) if (t.id != null) walk(t.id, []);
   return [...new Set(found)];
+}
+
+// Ids that exist only in the archive. Matches both the live shape (`- [x] 12.`)
+// and the archived one (`- [x] **12.**`), which is why the `\*?\*?` is there.
+let _archivedIds = null;
+function archivedIds() {
+  if (_archivedIds) return _archivedIds;
+  let txt = '';
+  try { txt = fs.readFileSync(DONE_FILE, 'utf8'); } catch { /* no archive yet */ }
+  _archivedIds = new Set([...txt.matchAll(/^\s*-\s*\[[ x~@]\]\s*\*?\*?(\d+)\./gm)]
+    .map((m) => Number(m[1])));
+  return _archivedIds;
 }
 
 function blockedBy(t, byId) {
@@ -427,9 +446,16 @@ function report(tasks, me, lane) {
     otherLane = [], device = [];
   for (const t of tasks) {
     if (t.mark === 'x') continue;
-    if (t.mark === '@') { human.push(t); continue; }
+    // ☠️ EVALUATE BLOCKERS BEFORE THE '@' BRANCH, or a typo in the `after:` of a
+    // task that is waiting on a person is never seen. Measured 2026-09-07: an
+    // `after: 9999` injected into a [@] task produced no warning at all, because
+    // the loop used to `continue` first and never called blockedBy. A [@] task
+    // still goes to the human bucket whatever its blockers say - that is the
+    // existing meaning of the marker, and is unchanged - but its prerequisites
+    // are now read, so the typo check covers every task in the file.
     const b = blockedBy(t, byId);
     t._b = b;
+    if (t.mark === '@') { human.push(t); continue; }
     if (b.open.length) blocked.push(t);
     else if (t.mark === '~') waiting.push(t);
     else {
@@ -870,7 +896,11 @@ function main() {
         r.expired.map((t) => `${t.id}. (${t.until})`).join(', '));
     }
     if (unknown.length) {
-      console.log(`\n☠️ prerequisites not in the queue (treated as met — check for a typo): ${unknown.join(', ')}`);
+      const arch = archivedIds();
+      const done = unknown.filter((u) => arch.has(Number(String(u).split('→').pop().trim())));
+      const typo = unknown.filter((u) => !arch.has(Number(String(u).split('→').pop().trim())));
+      if (done.length) console.log(`\n   ${done.length} prerequisite${done.length > 1 ? 's' : ''} satisfied by the archive: ${done.join(', ')}`);
+      if (typo.length) console.log(`\n☠️ prerequisites in NEITHER file (treated as met — this is what a typo looks like): ${typo.join(', ')}`);
     }
     process.exit(0);
   }
