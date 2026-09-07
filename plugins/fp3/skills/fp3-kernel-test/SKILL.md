@@ -385,6 +385,7 @@ cost a device, a boot, or a wrong conclusion at least once.
 20. ☠️ Force-pushing a rewritten branch orphans the package's pinned `_commit` — tag the old tip first, then check the tarball still resolves with `curl -sL` and reads **200**. Without `-L` every hash answers 302, a bogus one included, so the check passes unconditionally; run it against a bogus hash too.
 21. ☠️ Never stage an experiment in the kernel command line here — it is on disk, so it repeats on every boot, and both remote channels need userspace; a hang leaves nothing but a held power button. Put the variable in a module parameter, a sysfs write or a unit you can undo over ssh.
 22. ☠️ An escape route you have not exercised is not an escape route — boot the fallback entry once and run the recovery command once *while the device is healthy*; and when one does fail, first put a known-good artefact through the same path, or you will iterate on your image to chase a message that was never about it.
+23. ☠️ A systemd drop-in that sets `ExecStart=` **replaces the whole command line, and the last drop-in wins** — `/etc` beats `/usr/lib`, and a file named `zz-*` sorts after everything. A one-line debug drop-in silently deleted the distro's own workaround flag and cost two days chasing a "platform bug" that was our own configuration. Read the effective value back (`systemctl show <unit> -p ExecStart`) after adding one.
 
 **Measurement integrity — protect the measurement:**
 

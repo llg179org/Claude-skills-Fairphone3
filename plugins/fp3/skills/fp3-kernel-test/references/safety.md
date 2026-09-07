@@ -1095,3 +1095,75 @@ Both behaviours were observed on the same device.
 The general form: before differencing any counter, establish what resets it —
 and "it looked continuous last time" is not that. A counter whose reset condition
 you have not established is not an instrument, it is a number.
+
+
+## A drop-in that sets one option replaces the whole command line
+
+**Measured 2026-09-06/07, and it cost two days.** The symptom looked like a
+platform bug: after a long suspend ended by an incoming call, ModemManager lost
+the modem entirely — `mmcli -L` said *"No modems were found"* while the firmware
+was fine and `qmicli -d qrtr://0 --dms-get-model` answered normally. The phone
+could not ring. A 2×2 of suspend duration against wake source was run, a
+diagnosis was published, and then withdrawn when a sampler showed the QMI
+transport had answered on the first sample after resume and every one after.
+
+The cause was ours. postmarketOS ships
+
+```
+/usr/lib/systemd/system/ModemManager.service.d/quick-suspend-resume.conf
+  ExecStart=
+  ExecStart=/usr/sbin/ModemManager --test-quick-suspend-resume
+```
+
+which makes the daemon **sync** the existing modem on resume instead of
+re-scanning from scratch. A debug drop-in added a month later,
+
+```
+/etc/systemd/system/ModemManager.service.d/zz-fp3-debug.conf
+  ExecStart=
+  ExecStart=/usr/sbin/ModemManager --log-level=DEBUG
+```
+
+set one option — and thereby **deleted the other one**. Effective command line,
+read from systemd rather than inferred:
+
+```
+argv[]=/usr/sbin/ModemManager --log-level=DEBUG
+```
+
+### The three properties that combine into the trap
+
+1. **`ExecStart=` clears, it does not append.** In a `[Service]` section the
+   empty assignment resets the list; every drop-in that sets it discards what
+   earlier ones set. This is true of every list-valued directive, not just
+   `ExecStart`.
+2. **`/etc` overrides `/usr/lib`** for a drop-in of the same name, and drop-ins
+   are applied in lexicographic order — so `zz-` deliberately sorts last and
+   wins over everything, which is exactly why people name debug files that way.
+3. **Nothing warns.** No error, no log line, no difference in `systemctl status`
+   unless you read the argument vector. The unit starts, the daemon runs, and
+   only the behaviour is different.
+
+### The rule
+
+☠️ **After adding or editing a drop-in, read the effective value back:**
+
+```sh
+systemctl show <unit> -p ExecStart --value      # the argv[] that will actually run
+systemctl cat <unit>                            # every fragment, in order, so you can see who wins
+```
+
+`systemctl cat` shows the fragments concatenated — several `ExecStart=` lines in
+its output is not a contradiction, it is the override chain, and the **last** one
+is what runs. If your option is not in `systemctl show`'s argv, it is not set,
+however plainly it appears in the file you just wrote.
+
+### And the wider lesson, which is not about systemd
+
+The failure was invisible for two days because the investigation never asked
+*what else changed when we changed one thing*. Every measurement after
+2026-09-02 was taken on a daemon running a different command line than the
+distro intends, and none of them was wrong — they were all answers about a
+system nobody meant to build. **When a platform starts behaving unlike its
+documentation, diff the running configuration against the shipped one before
+diffing the source.**
