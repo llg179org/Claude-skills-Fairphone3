@@ -332,10 +332,29 @@ function blockedBy(t, byId) {
   return out;
 }
 
+// ☠️ ONLY an anchored date/time is parsed, never one found anywhere in the text.
+// Several `until:` values are prose that happens to mention dates - #177 names
+// both the day its letter was sent and the day to chase - and picking the first
+// date out of a sentence would have declared it expired the moment it was
+// written. If it does not START with the moment, it is not a moment.
+//
+// ☠️ A BARE DATE USED TO PARSE AS NOTHING. `until: 09-06` returned 0, so the task
+// appeared in neither the "coming up" list nor the expired list: it simply sat in
+// waiting for ever, which is what happened to #142. A date with no clock time is
+// due at the START of that day.
+//
+// ISO `YYYY-MM-DD` is the form to write. The year-less `MM-DD` is still accepted
+// so old entries keep working, but `untilIsLegacyDate` flags it: without a year
+// it silently means "this year", and across a new year that is wrong by twelve
+// months in the direction that hides an overdue task.
 function parseUntil(v) {
   if (!v) return 0;
   const s = String(v).trim();
-  let m = /^(\d{4}-)?(\d{2})-(\d{2})[ T](\d{1,2}):(\d{2})$/.exec(s);
+  let m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).getTime();
+  m = /^(\d{2})-(\d{2})$/.exec(s);
+  if (m) return new Date(new Date().getFullYear(), Number(m[1]) - 1, Number(m[2])).getTime();
+  m = /^(\d{4}-)?(\d{2})-(\d{2})[ T](\d{1,2}):(\d{2})$/.exec(s);
   if (m) {
     const y = m[1] ? Number(m[1].slice(0, 4)) : new Date().getFullYear();
     return new Date(y, Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5])).getTime();
@@ -351,6 +370,12 @@ function parseUntil(v) {
     return d.getTime();
   }
   return 0;
+}
+
+// True when the value is a date this tool understands but not in ISO form, so
+// `check` can say so once rather than let a year-less date rot silently.
+function untilIsLegacyDate(v) {
+  return !!v && /^\d{2}-\d{2}$/.test(String(v).trim());
 }
 
 const clip = (t, n) => (String(t || '').length > n ? String(t).slice(0, n - 1) + '…' : String(t || ''));
@@ -635,6 +660,19 @@ function main() {
         } else {
           const key = process.argv[4], val = process.argv.slice(5).join(' ').trim();
           if (!KEYS.includes(key)) return `usage: set <id> <${KEYS.join('|')}> <value>`;
+          // ☠️ A date that this tool cannot parse is worse than no date: the task
+          // then appears in neither the "coming up" list nor the expired one and
+          // waits for ever. Say so at write time, when it is one keystroke to fix.
+          if (key === 'until' && val && !parseUntil(val) && /^\s*\d{1,4}[-/.]\d{1,2}/.test(val)) {
+            console.error(`☠️ '${val.slice(0, 24)}…' starts like a date but does not parse. ` +
+              `Use ISO: until YYYY-MM-DD, or YYYY-MM-DD HH:MM. Writing it anyway — ` +
+              `it will be treated as prose and will never expire.`);
+          }
+          if (key === 'until' && untilIsLegacyDate(val)) {
+            console.error(`☠️ '${val}' has no year, so it means ${new Date().getFullYear()} ` +
+              `and will read as twelve months early after New Year. Prefer ` +
+              `${new Date().getFullYear()}-${val}.`);
+          }
           if (key === 'lane' && val && !LANES.includes(val)) return `lane must be one of ${LANES.join('|')}`;
           const at = body.search(line);
           const after = body.slice(at);
@@ -821,6 +859,13 @@ function main() {
         `   ← first refusal: ${own.session} finished what it continues`);
       for (const { t, cl } of r.held) console.log(`  [»] ${t.id}. ${clip(t.text, 60)}` +
         `   ← claimed by ${cl.session}, ${((Date.now() - cl.at) / 6e4).toFixed(0)} min ago`);
+      {
+        const legacy = r.waiting.filter((t) => untilIsLegacyDate(t.until));
+        if (legacy.length) console.log(`\n☠️ non-ISO until: ` +
+          legacy.map((t) => `${t.id}. (${t.until} → ${new Date().getFullYear()}-${t.until})`).join(', ') +
+          `\n   No year means "this year" and hides an overdue task after New Year. ` +
+          `Rewrite as YYYY-MM-DD.`);
+      }
       if (r.expired.length) console.log(`\n☠️ expired until:   ` +
         r.expired.map((t) => `${t.id}. (${t.until})`).join(', '));
     }
