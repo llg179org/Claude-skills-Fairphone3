@@ -2353,6 +2353,26 @@ shape [Factual integrity](#factual-integrity--overrides-everything-below)
 describes: a plausible trailer that no one wrote. Collect them mechanically —
 `b4 trailers -u` reads what was actually posted — rather than from memory.
 
+☠️ **And the three exceptions carry two preconditions that are easy to miss.**
+`Cc:`, `Reported-by:` and `Suggested-by:` need no explicit permission **only if**
+the person "contributed to the Linux kernel using that name and email address
+according to the lore archives or the commit history" **and**, for the latter
+two, "did the reporting or suggestion **in public**". So:
+
+- **Check the name and address are established.** `git log --all --format='%an
+  <%ae>' | grep -i <name>` in a real tree, or lore. A person who has never posted
+  under that address does not get the implicit permission, and an address they
+  used only somewhere private must not be exposed in a tag.
+- ☠️ **A report in private mail is not a public report.** Someone writing to you
+  directly about a regression has given you the bug, not the right to name them:
+  `Reported-by:` there needs asking, like `Tested-by:` does. The same letter's
+  content may still be *cited* in the commit message — what needs permission is
+  the trailer that names them.
+- `Reported-by:` "should be followed by a `Closes:` tag pointing to the report,
+  unless the report is not available on the web" — which is exactly the private
+  case, so the absence of a `Closes:` is a signal to check that permission was
+  actually obtained.
+
 **Two more the commit message itself has to carry.** Bjorn Andersson, asking for
 the crash details to be written into a fix: *"It would be wonderful, for my
 understanding today, as well as people in the coming months to be able to search
